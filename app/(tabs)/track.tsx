@@ -1,12 +1,10 @@
-
-
 import { doc, onSnapshot } from 'firebase/firestore';
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
-import { auth, db } from '../services/firebase';
+import { auth, db } from '../../services/firebase';
 
-export default function TrackScreen() {
+const TrackScreen = () => {
   const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
 
   useEffect(() => {
@@ -52,3 +50,5 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
   loading: { flex: 1, textAlign: 'center', marginTop: 50, fontSize: 18 }
 });
+
+export default TrackScreen;

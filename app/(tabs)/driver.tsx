@@ -1,38 +1,33 @@
 import { useRouter } from 'expo-router';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { useState } from 'react';
-import { Button, StyleSheet, Text, TextInput, View } from 'react-native';
-import { auth } from '../services/firebase';
+import { Alert, Button, StyleSheet, Text, TextInput, View } from 'react-native';
+import { auth } from '../../services/firebase';
 
-export default function SignupScreen() {
+export default function DriverScreen() {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
   const handleSignup = async () => {
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      console.log('Signup success:', userCredential.user.email);
-      router.push('/home'); // Redirect to home screen
-    } catch (error) {
-      if (error instanceof Error) {
-        console.log('Signup failed:', error.message);
-        alert('Signup failed: ' + error.message);
-      } else {
-        console.log('Unknown signup error:', error);
-        alert('Signup failed with unknown error');
-      }
+      await createUserWithEmailAndPassword(auth, email, password);
+      router.push('/home');
+    } catch (error: any) {
+      console.log('Signup failed:', error.message);
+      Alert.alert('Signup Error', error.message);
     }
   };
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>Create an Austangel Account</Text>
+      <Text style={styles.header}>Sign Up for Austangel</Text>
       <TextInput
         placeholder="Email"
         value={email}
         onChangeText={setEmail}
         style={styles.input}
+        autoCapitalize="none"
       />
       <TextInput
         placeholder="Password"
