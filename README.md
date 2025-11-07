@@ -1,50 +1,65 @@
-# Welcome to your Expo app 👋
+# Austangel Bus Tracker
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Expo Router + Firebase app for managing Austangel school buses. Parents watch buses in real time, drivers log activity, and admin maintain routes and permissions.
 
-## Get started
+## Quick Start
 
-1. Install dependencies
+1. Install dependencies (first run)
 
    ```bash
    npm install
    ```
 
-2. Start the app
+2. Start Metro and launch the iOS simulator
 
    ```bash
    npx expo start
    ```
 
-In the output, you'll find options to open the app in a
+## Firebase Setup & Seeding
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+1. Create a Firebase project and update `services/firebase.ts` with your config.
+2. In **Firestore** create collections:
+   - `users/{uid}` with fields `email`, `role` (`parent`, `driver`, `admin`), and optional `assignedBusId`.
+   - `buses/{busId}` with `nickname`, `driverName`, and optional `routeId`.
+   - `routes/{routeId}` storing `stops` as an ordered array of `{ id, name, latitude, longitude, order }`.
+3. In **Realtime Database** (RTDB) enable the default instance. Live bus positions are written to `/liveLocations/{busId}`.
+4. For a demo ride add:
+   - A parent user (`role: "parent"`) and a bus document (`nickname: "Austangel Bus 1"`, `driverName: "Mr. Adewale"`).
+   - Optional: `routes/demo-route-1` using the coordinates in `constants/geo.ts`.
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+The app fabricates parent profiles the first time they log in. Drivers and admin accounts need the correct `role` field in Firestore.
 
-## Get a fresh project
+## Simulating Bus Movement
 
-When you're ready, run:
+- **Driver Tools tab** → tap **Start Simulation** to publish a mock GPS point for the assigned bus.
+- **Track tab** → press **Start Simulation** (admin/parent preview) to broadcast a sample location from the selected route.
+- Update the driver name from the Track info card (admin only) or via the Admin tab.
+
+## Child Check-ins (Preview)
+
+Use **Driver Tools → Record Boarding** to write a demo event to the `checkins` collection. The structure matches the long-term boarded/dropped design.
+
+## Tests
+
+Run unit tests for navigation helpers, driver updates, and location subscriptions:
 
 ```bash
-npm run reset-project
+npm test
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Project Structure Highlights
 
-## Learn more
+- `models/` – typed Firestore/RTDB models.
+- `providers/AuthProvider.tsx` – role-aware auth context and routing guard.
+- `services/` – Firebase helpers (`firestore`, `realtime`).
+- `app/(auth)` – login flow.
+- `app/(tabs)` – signed-in experience (role-aware tabs, Track, Driver tools, Admin console).
+- `constants/geo.ts` – fallback geo data for simulations.
+- `__tests__/` – Jest specs for critical flows.
 
-To learn more about developing your project with Expo, look at the following resources:
+## TODO & Security Placeholders
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- Implement Firestore/RTDB security rules so drivers write only their bus, parents read with valid permission, and admin manage everything. Add TODO comments when rules are introduced.
+- Flesh out permissions workflow (temporary tracking access) and AI assistant entry point.
+- Expand check-in UI for per-child boarding/dropping flows.

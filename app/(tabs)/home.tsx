@@ -10,7 +10,7 @@ export default function HomeScreen() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (!user) {
-        router.replace('/login');
+        router.replace('/(auth)/login');
       }
     });
 

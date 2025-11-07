@@ -1,23 +1,30 @@
-// austangel/services/firebase.js
-import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+// services/firebase.js
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getApp, getApps, initializeApp } from 'firebase/app';
-import { getReactNativePersistence, initializeAuth } from 'firebase/auth';
+import { getAuth, getReactNativePersistence, initializeAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: "AIzaSyCEXAMPLE-REAL-KEY",
-  authDomain: "austangel.firebaseapp.com",
-  projectId: "austangel",
-  storageBucket: "austangel.appspot.com",
-  messagingSenderId: "123456789012",
-  appId: "1:123456789012:web:abc123def456"
+  apiKey: 'AIzaSyDzYIy3bPjJD5DJPBjNqQWzuWjbkL3Vj_o',
+  authDomain: 'austangels.firebaseapp.com',
+  projectId: 'austangels',
+  storageBucket: 'austangels.firebasestorage.app',
+  messagingSenderId: '503665611421',
+  appId: '1:503665611421:web:7584e208551f51e3517a74',
 };
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
-const auth = initializeAuth(app, {
-  persistence: getReactNativePersistence(ReactNativeAsyncStorage)
-});
+let auth;
+try {
+  auth = initializeAuth(app, {
+    persistence: getReactNativePersistence(AsyncStorage),
+  });
+} catch {
+  auth = getAuth(app);
+}
+
 const db = getFirestore(app);
 
-export { auth, db };
+export { app, auth, db };
