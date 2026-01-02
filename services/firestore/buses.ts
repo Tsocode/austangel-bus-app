@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, updateDoc } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
 
 import { Bus } from '@/models/bus';
 import { db } from '@/services/firebase';
@@ -55,4 +55,40 @@ export async function updateBusDriver(
     driverName: driverName ?? null,
     updatedAt: Date.now(),
   });
+}
+
+export async function createBus(
+  {
+    id,
+    nickname,
+    plateNumber,
+    driverId,
+    driverName,
+    routeId,
+  }: {
+    id?: string | null;
+    nickname: string;
+    plateNumber?: string | null;
+    driverId?: string | null;
+    driverName?: string | null;
+    routeId?: string | null;
+  }
+): Promise<string> {
+  const payload = {
+    nickname,
+    plateNumber: plateNumber ?? null,
+    driverId: driverId ?? null,
+    driverName: driverName ?? null,
+    routeId: routeId ?? null,
+    updatedAt: Date.now(),
+  };
+
+  if (id) {
+    const ref = doc(db, COLLECTION, id);
+    await setDoc(ref, payload);
+    return id;
+  }
+
+  const ref = await addDoc(collection(db, COLLECTION), payload);
+  return ref.id;
 }

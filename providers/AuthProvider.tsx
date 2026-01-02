@@ -30,15 +30,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<AustangelUser | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
 
+  const splitName = (value?: string | null) => {
+    const trimmed = value?.trim();
+    if (!trimmed || trimmed.includes('@')) {
+      return { firstName: undefined, lastName: undefined };
+    }
+    const parts = trimmed.split(/\s+/);
+    if (parts.length === 1) {
+      return { firstName: parts[0], lastName: undefined };
+    }
+    return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+  };
+
   const loadProfile = async (firebaseAccount: FirebaseUser) => {
     setStatus('loading');
     try {
       let userProfile = await getUserProfile(firebaseAccount.uid);
       if (!userProfile) {
+        const { firstName, lastName } = splitName(firebaseAccount.displayName);
         userProfile = {
           id: firebaseAccount.uid,
           email: firebaseAccount.email ?? '',
           role: 'parent',
+          firstName,
+          lastName,
           displayName: firebaseAccount.displayName ?? firebaseAccount.email ?? 'Austangel Parent',
           createdAt: Date.now(),
         };
@@ -50,10 +65,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus('authorized');
     } catch (error) {
       console.warn('Failed to load profile from Firestore, using fallback profile.', error);
+      const { firstName, lastName } = splitName(firebaseAccount.displayName);
       const fallbackProfile: AustangelUser = {
         id: firebaseAccount.uid,
         email: firebaseAccount.email ?? '',
         role: 'parent',
+        firstName,
+        lastName,
         displayName: firebaseAccount.displayName ?? firebaseAccount.email ?? 'Austangel Parent',
         createdAt: Date.now(),
       };

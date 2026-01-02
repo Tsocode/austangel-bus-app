@@ -17,6 +17,8 @@ export async function getUserProfile(uid: string): Promise<AustangelUser | null>
     id: snapshot.id,
     email: data.email ?? '',
     role: data.role,
+    firstName: data.firstName,
+    lastName: data.lastName,
     displayName: data.displayName,
     assignedBusId: data.assignedBusId,
     childIds: data.childIds,
@@ -34,6 +36,8 @@ export async function upsertUserProfile(user: AustangelUser): Promise<void> {
     {
       email: user.email,
       role: user.role,
+      firstName: user.firstName ?? null,
+      lastName: user.lastName ?? null,
       displayName: user.displayName,
       assignedBusId: user.assignedBusId ?? null,
       childIds: user.childIds ?? [],

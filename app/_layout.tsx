@@ -7,6 +7,7 @@ import { ActivityIndicator, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { AppearanceProvider } from '@/providers/AppearanceProvider';
 import { AuthProvider, useAuthContext } from '@/providers/AuthProvider';
 import { getLandingRouteForRole } from '@/utils/navigation';
 
@@ -52,7 +53,6 @@ function RootNavigation() {
 }
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
   const [loaded] = useFonts({
     SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
   });
@@ -62,11 +62,20 @@ export default function RootLayout() {
   }
 
   return (
-    <AuthProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <RootNavigation />
-        <StatusBar style="auto" />
-      </ThemeProvider>
-    </AuthProvider>
+    <AppearanceProvider>
+      <AuthProvider>
+        <ThemedApp />
+      </AuthProvider>
+    </AppearanceProvider>
+  );
+}
+
+function ThemedApp() {
+  const colorScheme = useColorScheme();
+  return (
+    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <RootNavigation />
+      <StatusBar style="auto" />
+    </ThemeProvider>
   );
 }
