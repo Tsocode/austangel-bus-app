@@ -5,8 +5,13 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
-import { ActivityIndicator, View } from 'react-native';
-import 'react-native-reanimated';
+import { ActivityIndicator, View, Platform } from 'react-native';
+
+// Only import react-native-reanimated on native platforms
+// On web, Reanimated animations are not supported
+if (Platform.OS !== 'web') {
+  require('react-native-reanimated');
+}
 
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { AppearanceProvider } from '@/providers/AppearanceProvider';

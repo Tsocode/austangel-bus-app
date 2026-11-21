@@ -1,0 +1,46 @@
+# Firebase Rules Deployment — NEXT COMMANDS
+
+You are now authenticated. Run these commands:
+
+## Command 1: Set your Firebase project
+```bash
+firebase use austangels
+```
+
+Expected output:
+```
+Now using project austangels
+```
+
+## Command 2: Deploy the security rules
+```bash
+firebase deploy --only firestore:rules,database:rules
+```
+
+Expected output:
+```
+=== Deploying to 'austangels' ===
+
+i  deploying firestore, database
+i  firestore: checking firestore.rules for compilation errors...
+✔  firestore: rules file compiled successfully
+i  database: checking database.rules.json for compilation errors...
+✔  database: rules compiled successfully
+i  firestore: uploading rules...
+✔  firestore: released rules to cloud.firestore
+i  database: releasing rules...
+✔  database: released new rules for austangels
+
+✔  Deploy complete!
+```
+
+## Verification
+After successful deployment, verify the rules are live:
+- **Firestore Rules:** https://console.firebase.google.com/project/austangels/firestore/rules
+- **Realtime Database Rules:** https://console.firebase.google.com/project/austangels/database/rules
+
+Both should show your new security rules.
+
+---
+
+**Copy and paste those commands now!**

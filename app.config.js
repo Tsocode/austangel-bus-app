@@ -12,8 +12,9 @@ export default ({ config }) => {
     icon: './assets/images/icon.png',
     scheme: 'austangel',
     userInterfaceStyle: 'automatic',
-    newArchEnabled: true,
+    newArchEnabled: false,
     ios: {
+      bundleIdentifier: 'com.tsocode.austangel',
       supportsTablet: true,
       ...(googleMapsApiKey
         ? {
@@ -24,6 +25,7 @@ export default ({ config }) => {
         : {}),
     },
     android: {
+      package: 'com.tsocode.austangel',
       adaptiveIcon: {
         foregroundImage: './assets/images/adaptive-icon.png',
         backgroundColor: '#ffffff',

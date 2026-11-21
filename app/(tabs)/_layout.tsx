@@ -51,9 +51,14 @@ export default function TabLayout() {
             backgroundColor: theme.background,
             borderTopColor: theme.icon,
           },
-          default: {
+          android: {
             backgroundColor: theme.background,
             borderTopColor: theme.icon,
+          },
+          web: {
+            backgroundColor: theme.background,
+            borderTopColor: theme.icon,
+            borderTopWidth: 1,
           },
         }),
       }}>

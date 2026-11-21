@@ -1,6 +1,7 @@
 // Global polyfills for Expo 58 + React Native 0.88 compatibility
 // This must be imported FIRST before anything else
 // Runs at module evaluation time, before Hermes engine fully initializes
+// Works in both Hermes and Node.js (for Expo Router SSR)
 
 // ============================================================================
 // CRITICAL: Intercept TurboModuleRegistry and metro require BEFORE any native module loads
@@ -78,14 +79,16 @@ const TurboModuleRegistryMock = {
   },
 };
 
-global.TurboModuleRegistry = TurboModuleRegistryMock;
+// Use globalThis for compatibility with both Hermes and Node.js (SSR)
+globalThis.TurboModuleRegistry = TurboModuleRegistryMock;
 
 // ============================================================================
 // Global API Polyfills (FormData, Blob, FileReader, File)
+// Using globalThis for Hermes + Node.js compatibility
 // ============================================================================
 
-if (typeof global.FormData === 'undefined') {
-  global.FormData = class FormData {
+if (typeof globalThis.FormData === 'undefined') {
+  globalThis.FormData = class FormData {
     constructor() {
       this.entries = [];
     }
@@ -114,16 +117,50 @@ if (typeof global.FormData === 'undefined') {
   };
 }
 
-if (typeof global.FileReader === 'undefined') {
-  global.FileReader = class FileReader {
-    readAsText(blob) {}
-    readAsDataURL(blob) {}
-    readAsArrayBuffer(blob) {}
+if (typeof globalThis.FileReader === 'undefined') {
+  globalThis.FileReader = class FileReader {
+    constructor() {
+      this.readyState = 0;
+      this.result = null;
+      this.error = null;
+      this.onload = null;
+      this.onerror = null;
+      this.onprogress = null;
+      this.onloadstart = null;
+      this.onloadend = null;
+    }
+    
+    readAsText(blob, encoding) {
+      this.readyState = 1;
+      this.result = '';
+      this.readyState = 2;
+      if (this.onload) this.onload();
+    }
+    
+    readAsDataURL(blob) {
+      this.readyState = 1;
+      this.result = 'data:application/octet-stream;base64,';
+      this.readyState = 2;
+      if (this.onload) this.onload();
+    }
+    
+    readAsArrayBuffer(blob) {
+      this.readyState = 1;
+      this.result = new ArrayBuffer(0);
+      this.readyState = 2;
+      if (this.onload) this.onload();
+    }
+    
+    abort() {
+      this.readyState = 2;
+      this.error = new Error('FileReader.abort() called');
+      if (this.onerror) this.onerror();
+    }
   };
 }
 
-if (typeof global.Blob === 'undefined') {
-  global.Blob = class Blob {
+if (typeof globalThis.Blob === 'undefined') {
+  globalThis.Blob = class Blob {
     constructor(parts = [], options = {}) {
       this.parts = parts;
       this.type = options.type || '';
@@ -131,8 +168,8 @@ if (typeof global.Blob === 'undefined') {
   };
 }
 
-if (typeof global.File === 'undefined') {
-  global.File = class File extends global.Blob {
+if (typeof globalThis.File === 'undefined') {
+  globalThis.File = class File extends globalThis.Blob {
     constructor(parts = [], filename = '', options = {}) {
       super(parts, options);
       this.name = filename;
@@ -144,8 +181,8 @@ if (typeof global.File === 'undefined') {
 // URL and URLSearchParams Polyfills
 // ============================================================================
 
-if (typeof global.URL === 'undefined') {
-  global.URL = class URL {
+if (typeof globalThis.URL === 'undefined') {
+  globalThis.URL = class URL {
     constructor(url, base) {
       this.href = url;
       this.pathname = '';
@@ -154,8 +191,8 @@ if (typeof global.URL === 'undefined') {
   };
 }
 
-if (typeof global.URLSearchParams === 'undefined') {
-  global.URLSearchParams = class URLSearchParams {
+if (typeof globalThis.URLSearchParams === 'undefined') {
+  globalThis.URLSearchParams = class URLSearchParams {
     constructor(init) {
       this.params = new Map();
       if (typeof init === 'string') {

@@ -1,16 +1,17 @@
-import { useEffect } from 'react';
-import { StyleSheet } from 'react-native';
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
-
-import { ThemedText } from '@/components/ThemedText';
+﻿import { useEffect } from "react";
+import { StyleSheet, Platform } from "react-native";
+import { ThemedText } from "@/components/ThemedText";
 
 export function HelloWave() {
+  // On web, just render the wave emoji without animation
+  if (Platform.OS === "web") {
+    return <ThemedText style={styles.text}>👋</ThemedText>;
+  }
+
+  // On native (iOS/Android), use Reanimated for animations
+  const Animated = require("react-native-reanimated").default;
+  const { useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } = require("react-native-reanimated");
+
   const rotationAnimation = useSharedValue(0);
 
   useEffect(() => {

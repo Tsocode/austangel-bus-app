@@ -51,11 +51,11 @@ service cloud.firestore {
       // Only admin can delete users
       allow delete: if isAdmin();
       
-      // Admins can create new users
-      allow create: if isAdmin() && request.resource.data.role != null;
+      // New users can create their own profile on first signup
+      allow create: if isOwnUser(userId) && request.resource.data.role in ['admin', 'driver', 'parent', 'attendant'];
       
-      // Users cannot directly create their own profile (must use Firebase Auth)
-      allow create: if false;
+      // Admins can also create users
+      allow create: if isAdmin() && request.resource.data.role != null;
 
       // ==========================================
       // BUSES SUBCOLLECTION

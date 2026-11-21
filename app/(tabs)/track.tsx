@@ -15,8 +15,12 @@ import {
   ViewStyle,
 } from 'react-native';
 
-// Conditionally load react-native-maps for native only (not web)
-// On web, MapView will be null and the component won't render
+// ============================================================================
+// CAREFUL: Conditionally load react-native-maps for native only (not web)
+// ============================================================================
+// On web, MapView will be null and the component won't render maps
+// Use try-catch because Metro tries to resolve react-native-maps even with
+// Platform checks, and on web it will fail to load native internals
 const shouldLoadMaps = Platform.OS !== 'web';
 
 type MapViewInstance = any;
@@ -35,6 +39,7 @@ let Polyline: any = null;
 
 if (shouldLoadMaps) {
   try {
+    // eslint-disable-next-line global-require
     const mapsModule = require('react-native-maps');
     MapView = mapsModule.default;
     AnimatedRegion = mapsModule.AnimatedRegion;
@@ -43,7 +48,9 @@ if (shouldLoadMaps) {
     MarkerAnimated = mapsModule.MarkerAnimated;
     Polyline = mapsModule.Polyline;
   } catch (e) {
-    console.warn('Failed to load react-native-maps:', e);
+    console.warn('Failed to load react-native-maps (this is OK on web):', e);
+    // On web, these will stay as null, and we just won't render the map
+    MapView = null;
   }
 }
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -907,63 +914,81 @@ export default function TrackScreen() {
     );
   }
 
-  const renderMapView = (style: StyleProp<ViewStyle>) => (
-    <MapView
-      ref={mapRef}
-      style={style}
-      initialRegion={{
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        latitudeDelta: zoomDelta.latitudeDelta,
-        longitudeDelta: zoomDelta.longitudeDelta,
-      }}>
-      {routePolyline.length > 1 ? (
-        <Polyline coordinates={routePolyline} strokeWidth={5} strokeColor="#93c5fd" />
-      ) : null}
-      {trailCoords.length > 1 ? (
-        <Polyline coordinates={trailCoords} strokeWidth={6} strokeColor="#2563eb" />
-      ) : null}
-      {endCoord ? (
-        <Marker
-          coordinate={endCoord}
-          title="Selected destination"
-          pinColor="#ef4444"
-        />
-      ) : null}
-      {startCoord ? (
-        <Marker
-          coordinate={startCoord}
-          title="Selected start"
-          pinColor="#22c55e"
-        />
-      ) : null}
-      {routePoints.map((stop) => (
-        <Marker
-          key={stop.id}
-          coordinate={{ latitude: stop.latitude, longitude: stop.longitude }}
-          title={stop.name}
-          pinColor="#f59e0b"
-        />
-      ))}
-      {startCoord ? (
-        <Marker coordinate={startCoord} title="Start" pinColor="#22c55e" />
-      ) : null}
-      {endCoord ? (
-        <Marker coordinate={endCoord} title="Destination" pinColor="#ef4444" />
-      ) : null}
-      <MarkerAnimated
-        coordinate={busCoordinate.current as unknown as LatLngCoord}
-        title="Bus location"
-        description={selectedBus?.nickname}
-        rotation={liveLocation?.heading ?? 0}
-        anchor={{ x: 0.5, y: 0.5 }}
-      >
-        <View style={[styles.busMarker, isStale && styles.busMarkerStale]}>
-          <MaterialIcons name="directions-bus" size={22} color="#fff" />
+  const renderMapView = (style: StyleProp<ViewStyle>) => {
+    if (!MapView) {
+      return (
+        <View style={[style, { backgroundColor: '#f5f5f5', justifyContent: 'center', alignItems: 'center', padding: 20 }]}>
+          <MaterialIcons name="location-on" size={48} color="#2563eb" style={{ marginBottom: 16 }} />
+          <Text style={{ fontSize: 16, fontWeight: '600', color: '#1f2937', marginBottom: 8, textAlign: 'center' }}>
+            Bus Tracking on Web
+          </Text>
+          <Text style={{ fontSize: 14, color: '#6b7280', textAlign: 'center', lineHeight: 20 }}>
+            Real-time map tracking works best on iOS and Android.{'\n\n'}
+            On web, use the driver tools and check-in features below.{'\n\n'}
+            For full tracking: Use Expo Go or build a development app.
+          </Text>
         </View>
-      </MarkerAnimated>
-    </MapView>
-  );
+      );
+    }
+    
+    return (
+      <MapView
+        ref={mapRef}
+        style={style}
+        initialRegion={{
+          latitude: currentLocation.latitude,
+          longitude: currentLocation.longitude,
+          latitudeDelta: zoomDelta.latitudeDelta,
+          longitudeDelta: zoomDelta.longitudeDelta,
+        }}>
+        {routePolyline.length > 1 ? (
+          <Polyline coordinates={routePolyline} strokeWidth={5} strokeColor="#93c5fd" />
+        ) : null}
+        {trailCoords.length > 1 ? (
+          <Polyline coordinates={trailCoords} strokeWidth={6} strokeColor="#2563eb" />
+        ) : null}
+        {endCoord ? (
+          <Marker
+            coordinate={endCoord}
+            title="Selected destination"
+            pinColor="#ef4444"
+          />
+        ) : null}
+        {startCoord ? (
+          <Marker
+            coordinate={startCoord}
+            title="Selected start"
+            pinColor="#22c55e"
+          />
+        ) : null}
+        {routePoints.map((stop) => (
+          <Marker
+            key={stop.id}
+            coordinate={{ latitude: stop.latitude, longitude: stop.longitude }}
+            title={stop.name}
+            pinColor="#f59e0b"
+          />
+        ))}
+        {startCoord ? (
+          <Marker coordinate={startCoord} title="Start" pinColor="#22c55e" />
+        ) : null}
+        {endCoord ? (
+          <Marker coordinate={endCoord} title="Destination" pinColor="#ef4444" />
+        ) : null}
+        <MarkerAnimated
+          coordinate={busCoordinate.current as unknown as LatLngCoord}
+          title="Bus location"
+          description={selectedBus?.nickname}
+          rotation={liveLocation?.heading ?? 0}
+          anchor={{ x: 0.5, y: 0.5 }}
+        >
+          <View style={[styles.busMarker, isStale && styles.busMarkerStale]}>
+            <MaterialIcons name="directions-bus" size={22} color="#fff" />
+          </View>
+        </MarkerAnimated>
+      </MapView>
+    );
+  };
 
   const renderMapControls = (isFullscreen: boolean) => (
     <View style={[styles.mapControls, isFullscreen ? styles.fullscreenControls : null]}>
