@@ -3,14 +3,12 @@
 // Runs at module evaluation time, before Hermes engine fully initializes
 
 // ============================================================================
-// CRITICAL: Intercept TurboModuleRegistry BEFORE any native module loads
+// CRITICAL: Intercept TurboModuleRegistry and metro require BEFORE any native module loads
 // ============================================================================
 
-// Save the original TurboModuleRegistry if it exists
-const OriginalTurboModuleRegistry = global.TurboModuleRegistry;
-
 // Mock TurboModuleRegistry to intercept ALL native module loading attempts
-global.TurboModuleRegistry = {
+// Do NOT spread the original because it may throw on getEnforcing
+const TurboModuleRegistryMock = {
   // Catch all getEnforcing calls and return mock instead of throwing
   getEnforcing(name) {
     console.warn(`[Polyfill] TurboModuleRegistry.getEnforcing called for "${name}" - returning mock`);
@@ -24,11 +22,25 @@ global.TurboModuleRegistry = {
       };
     }
     
+    if (name === 'NativeEventEmitter' || name === 'EventEmitter') {
+      return {
+        addListener: () => ({ remove: () => {} }),
+        removeListener: () => {},
+        removeAllListeners: () => {},
+      };
+    }
+
+    if (name === 'BlobModule') {
+      return {
+        getConstants: () => ({ BLOB_URI_SCHEME: 'blob' }),
+        addNetworkingHandler: () => {},
+        enableBlobModule: () => {},
+      };
+    }
+    
     // For any other module, return a generic mock object
     return new Proxy({}, {
-      get() {
-        return () => {};
-      },
+      get: () => () => {},
     });
   },
   
@@ -44,16 +56,29 @@ global.TurboModuleRegistry = {
       };
     }
     
+    if (name === 'NativeEventEmitter' || name === 'EventEmitter') {
+      return {
+        addListener: () => ({ remove: () => {} }),
+        removeListener: () => {},
+        removeAllListeners: () => {},
+      };
+    }
+
+    if (name === 'BlobModule') {
+      return {
+        getConstants: () => ({ BLOB_URI_SCHEME: 'blob' }),
+        addNetworkingHandler: () => {},
+        enableBlobModule: () => {},
+      };
+    }
+    
     return new Proxy({}, {
-      get() {
-        return () => {};
-      },
+      get: () => () => {},
     });
   },
-  
-  // Allow other methods to pass through if they existed
-  ...OriginalTurboModuleRegistry,
 };
+
+global.TurboModuleRegistry = TurboModuleRegistryMock;
 
 // ============================================================================
 // Global API Polyfills (FormData, Blob, FileReader, File)

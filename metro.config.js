@@ -14,6 +14,7 @@ config.resolver.extraNodeModules = {
   'react-native/setup-env': path.resolve(__dirname, 'node_modules/react-native/setup-env.js'),
   'react-native/unstable-internals-do-not-use': path.resolve(__dirname, 'node_modules/react-native/unstable-internals-do-not-use.js'),
   'react-native/asset-registry': path.resolve(__dirname, 'node_modules/react-native/asset-registry.js'),
+  'react-native/FileReaderModule': path.resolve(__dirname, 'node_modules/react-native/FileReaderModule.js'),
 };
 
 module.exports = config;
