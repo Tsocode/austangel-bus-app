@@ -2,85 +2,81 @@ import { useRouter } from 'expo-router';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useAuthContext } from '@/providers/AuthProvider';
-import { useColorScheme } from '@/hooks/useColorScheme';
-import { Colors } from '@/constants/Colors';
 
 export default function TravelDashboard() {
   const router = useRouter();
   const { profile } = useAuthContext();
-  const colorScheme = useColorScheme();
-  const theme = Colors[colorScheme ?? 'light'];
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+    <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
         {/* Header */}
         <View style={styles.header}>
-          <Text style={[styles.greeting, { color: theme.text }]}>
+          <Text style={styles.greeting}>
             Welcome back, {profile?.firstName || 'Guest'}! 👋
           </Text>
-          <Text style={[styles.subtitle, { color: theme.icon }]}>
-            Ride & Travel Service
-          </Text>
+          <Text style={styles.subtitle}>Vehicle & Travel Services</Text>
         </View>
 
-        {/* Main Actions */}
+        {/* Main Action Buttons */}
         <View style={styles.actionsContainer}>
-          {/* Book Appointment Card */}
+          {/* Book Appointment Button */}
           <TouchableOpacity
-            style={[styles.actionCard, styles.bookCard]}
-            onPress={() => router.push('/(travel)/book-appointment')}>
-            <View style={styles.cardContent}>
-              <MaterialIcons name="directions-car" size={48} color="#fff" />
-              <Text style={styles.cardTitle}>Book a Ride</Text>
-              <Text style={styles.cardSubtitle}>
-                Schedule your next trip
-              </Text>
+            style={styles.actionButton}
+            onPress={() => router.push('/(travel)/book-appointment')}
+            activeOpacity={0.8}>
+            <View style={styles.iconContainer}>
+              <MaterialIcons name="directions-car" size={40} color="#2563eb" />
             </View>
-            <MaterialIcons name="arrow-forward" size={24} color="#fff" style={styles.cardArrow} />
+            <View style={styles.buttonContent}>
+              <Text style={styles.buttonTitle}>Book an Appointment</Text>
+              <Text style={styles.buttonSubtitle}>Schedule a ride or trip</Text>
+            </View>
+            <MaterialIcons name="chevron-right" size={24} color="#6b7280" />
           </TouchableOpacity>
 
-          {/* Monitor Trip Card */}
+          {/* Monitor Trip Button */}
           <TouchableOpacity
-            style={[styles.actionCard, styles.monitorCard]}
-            onPress={() => router.push('/(travel)/monitor-trip')}>
-            <View style={styles.cardContent}>
-              <MaterialIcons name="location-on" size={48} color="#fff" />
-              <Text style={styles.cardTitle}>Track Trip</Text>
-              <Text style={styles.cardSubtitle}>
-                Monitor your active trips
-              </Text>
+            style={styles.actionButton}
+            onPress={() => router.push('/(travel)/monitor-trip')}
+            activeOpacity={0.8}>
+            <View style={styles.iconContainer}>
+              <MaterialIcons name="location-on" size={40} color="#059669" />
             </View>
-            <MaterialIcons name="arrow-forward" size={24} color="#fff" style={styles.cardArrow} />
+            <View style={styles.buttonContent}>
+              <Text style={styles.buttonTitle}>Monitor Trip</Text>
+              <Text style={styles.buttonSubtitle}>Track your active trips</Text>
+            </View>
+            <MaterialIcons name="chevron-right" size={24} color="#6b7280" />
           </TouchableOpacity>
         </View>
 
-        {/* Quick Stats */}
-        <View style={styles.statsContainer}>
-          <View style={[styles.statCard, { backgroundColor: theme.icon, opacity: 0.1 }]}>
-            <MaterialIcons name="check-circle" size={32} color={theme.tint} />
-            <Text style={[styles.statLabel, { color: theme.text }]}>Completed Trips</Text>
-            <Text style={[styles.statValue, { color: theme.tint }]}>0</Text>
+        {/* Quick Info Cards */}
+        <View style={styles.infoCardsContainer}>
+          <View style={styles.infoCard}>
+            <MaterialIcons name="check-circle" size={28} color="#2563eb" />
+            <Text style={styles.infoCardLabel}>Completed</Text>
+            <Text style={styles.infoCardValue}>0 trips</Text>
           </View>
 
-          <View style={[styles.statCard, { backgroundColor: theme.icon, opacity: 0.1 }]}>
-            <MaterialIcons name="star" size={32} color={theme.tint} />
-            <Text style={[styles.statLabel, { color: theme.text }]}>Rating</Text>
-            <Text style={[styles.statValue, { color: theme.tint }]}>---</Text>
+          <View style={styles.infoCard}>
+            <MaterialIcons name="star" size={28} color="#f59e0b" />
+            <Text style={styles.infoCardLabel}>Rating</Text>
+            <Text style={styles.infoCardValue}>--</Text>
           </View>
 
-          <View style={[styles.statCard, { backgroundColor: theme.icon, opacity: 0.1 }]}>
-            <MaterialIcons name="account-balance-wallet" size={32} color={theme.tint} />
-            <Text style={[styles.statLabel, { color: theme.text }]}>Wallet</Text>
-            <Text style={[styles.statValue, { color: theme.tint }]}>$0.00</Text>
+          <View style={styles.infoCard}>
+            <MaterialIcons name="account-balance-wallet" size={28} color="#059669" />
+            <Text style={styles.infoCardLabel}>Wallet</Text>
+            <Text style={styles.infoCardValue}>$0.00</Text>
           </View>
         </View>
 
-        {/* Info Section */}
-        <View style={[styles.infoSection, { borderTopColor: theme.icon, borderTopWidth: 1 }]}>
-          <Text style={[styles.infoTitle, { color: theme.text }]}>About This Service</Text>
-          <Text style={[styles.infoText, { color: theme.icon }]}>
-            Book rides on-demand or schedule in advance. Track your driver in real-time and pay securely through the app.
+        {/* About Section */}
+        <View style={styles.aboutSection}>
+          <Text style={styles.aboutTitle}>About Vehicle & Travel</Text>
+          <Text style={styles.aboutText}>
+            Easily book rides, track trips in real-time, and manage your transportation needs. Pay securely through the app.
           </Text>
         </View>
       </ScrollView>
@@ -91,92 +87,108 @@ export default function TravelDashboard() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#ffffff',
   },
   content: {
     padding: 20,
+    paddingBottom: 40,
   },
   header: {
-    marginBottom: 30,
+    marginBottom: 32,
+    paddingTop: 8,
   },
   greeting: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#000000',
     marginBottom: 4,
   },
   subtitle: {
     fontSize: 14,
+    color: '#6b7280',
   },
   actionsContainer: {
-    gap: 16,
-    marginBottom: 30,
+    gap: 12,
+    marginBottom: 32,
   },
-  actionCard: {
-    borderRadius: 16,
-    padding: 20,
+  actionButton: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    padding: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    elevation: 4,
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
-    shadowRadius: 4,
+    shadowRadius: 2,
   },
-  bookCard: {
-    backgroundColor: '#0a7ea4',
+  iconContainer: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: '#f3f4f6',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  monitorCard: {
-    backgroundColor: '#059669',
-  },
-  cardContent: {
+  buttonContent: {
     flex: 1,
   },
-  cardTitle: {
-    fontSize: 18,
+  buttonTitle: {
+    fontSize: 16,
     fontWeight: '600',
-    color: '#fff',
-    marginTop: 12,
+    color: '#000000',
+    marginBottom: 2,
   },
-  cardSubtitle: {
-    fontSize: 12,
-    color: 'rgba(255, 255, 255, 0.8)',
-    marginTop: 4,
+  buttonSubtitle: {
+    fontSize: 13,
+    color: '#6b7280',
   },
-  cardArrow: {
-    marginLeft: 16,
-  },
-  statsContainer: {
+  infoCardsContainer: {
     flexDirection: 'row',
     gap: 12,
-    marginBottom: 30,
+    marginBottom: 32,
     justifyContent: 'space-between',
   },
-  statCard: {
+  infoCard: {
     flex: 1,
+    backgroundColor: '#f9fafb',
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
-  statLabel: {
+  infoCardLabel: {
     fontSize: 12,
-    marginTop: 8,
-    textAlign: 'center',
+    color: '#6b7280',
+    fontWeight: '500',
   },
-  statValue: {
-    fontSize: 18,
+  infoCardValue: {
+    fontSize: 16,
     fontWeight: '700',
-    marginTop: 4,
+    color: '#1f2937',
   },
-  infoSection: {
-    paddingTop: 20,
+  aboutSection: {
+    backgroundColor: '#f9fafb',
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
-  infoTitle: {
+  aboutTitle: {
     fontSize: 14,
     fontWeight: '600',
-    marginBottom: 8,
+    color: '#000000',
   },
-  infoText: {
+  aboutText: {
     fontSize: 13,
+    color: '#6b7280',
     lineHeight: 20,
   },
 });
