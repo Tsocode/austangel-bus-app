@@ -61,6 +61,9 @@ export default ({ config }) => {
     },
     extra: {
       ...config.extra,
+      eas: {
+        projectId: '3778bb84-a6a0-4df5-945e-bbd566ff5134',
+      },
       expoPublicFirebaseApiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
       expoPublicFirebaseAuthDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
       expoPublicFirebaseProjectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
