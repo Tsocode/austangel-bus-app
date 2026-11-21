@@ -1,4 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { Platform } from 'react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -13,7 +14,38 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
-import MapView, { AnimatedRegion, LatLng, Marker, MarkerAnimated, Polyline } from 'react-native-maps';
+
+// Conditionally load react-native-maps for native only (not web)
+// On web, MapView will be null and the component won't render
+const shouldLoadMaps = Platform.OS !== 'web';
+
+type MapViewInstance = any;
+type LatLngCoord = any;
+type MarkerType = any;
+type MarkerAnimatedType = any;
+type PolylineType = any;
+type AnimatedRegionType = any;
+
+let MapView: any = null;
+let AnimatedRegion: any = null;
+let LatLng: any = null;
+let Marker: any = null;
+let MarkerAnimated: any = null;
+let Polyline: any = null;
+
+if (shouldLoadMaps) {
+  try {
+    const mapsModule = require('react-native-maps');
+    MapView = mapsModule.default;
+    AnimatedRegion = mapsModule.AnimatedRegion;
+    LatLng = mapsModule.LatLng;
+    Marker = mapsModule.Marker;
+    MarkerAnimated = mapsModule.MarkerAnimated;
+    Polyline = mapsModule.Polyline;
+  } catch (e) {
+    console.warn('Failed to load react-native-maps:', e);
+  }
+}
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SettingsButton } from '@/components/ui/SettingsButton';
@@ -169,7 +201,7 @@ export default function TrackScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [zoomDelta, setZoomDelta] = useState({ latitudeDelta: 0.03, longitudeDelta: 0.03 });
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
-  const mapRef = useRef<MapView | null>(null);
+  const mapRef = useRef<MapViewInstance | null>(null);
   const simulationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const simulationStep = useRef(0);
   const stopScheduleRef = useRef<{ index: number; stop: RouteStop; dwellSeconds: number }[]>([]);
@@ -920,7 +952,7 @@ export default function TrackScreen() {
         <Marker coordinate={endCoord} title="Destination" pinColor="#ef4444" />
       ) : null}
       <MarkerAnimated
-        coordinate={busCoordinate.current as unknown as LatLng}
+        coordinate={busCoordinate.current as unknown as LatLngCoord}
         title="Bus location"
         description={selectedBus?.nickname}
         rotation={liveLocation?.heading ?? 0}
