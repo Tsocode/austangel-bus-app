@@ -1,0 +1,203 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isDriver() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver';
+    }
+
+    function isAttendant() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'attendant';
+    }
+
+    function isParent() {
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'parent';
+    }
+
+    function isOwnUser(userId) {
+      return request.auth.uid == userId;
+    }
+
+    function isAssignedToUser(userId) {
+      let userDoc = get(/databases/$(database)/documents/users/$(userId)).data;
+      return request.auth.uid in userDoc.assignedDrivers || request.auth.uid == userId;
+    }
+
+    // ==========================================
+    // USERS COLLECTION
+    // ==========================================
+    match /users/{userId} {
+      // User can read their own profile
+      allow read: if isOwnUser(userId);
+      
+      // Admin can read all user profiles
+      allow read: if isAdmin();
+      
+      // User can update their own profile (except role field)
+      allow update: if isOwnUser(userId) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'createdAt']);
+      
+      // Only admin can change user roles
+      allow update: if isAdmin() && request.resource.data.role != resource.data.role;
+      
+      // Only admin can delete users
+      allow delete: if isAdmin();
+      
+      // Admins can create new users
+      allow create: if isAdmin() && request.resource.data.role != null;
+      
+      // Users cannot directly create their own profile (must use Firebase Auth)
+      allow create: if false;
+
+      // ==========================================
+      // BUSES SUBCOLLECTION
+      // ==========================================
+      match /buses/{busId} {
+        // Allow reads if user is admin or assigned to this bus
+        allow read: if isAdmin() || request.auth.uid == resource.data.assignedDriver || request.auth.uid in resource.data.assignedAttendants;
+        
+        // Admin can write to buses
+        allow write: if isAdmin();
+        
+        // Drivers can update their own bus location and status
+        allow update: if isDriver() && request.auth.uid == resource.data.assignedDriver && 
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['assignedDriver', 'createdAt', 'ownedBy']);
+      }
+
+      // ==========================================
+      // CHILDREN SUBCOLLECTION (for parents)
+      // ==========================================
+      match /children/{childId} {
+        // Parents can read their own children
+        allow read: if isParent() && isOwnUser(userId);
+        
+        // Parents can update their own children
+        allow write: if isParent() && isOwnUser(userId);
+        
+        // Admins can read/write all children
+        allow read, write: if isAdmin();
+        
+        // Drivers and attendants can read children on their bus
+        allow read: if (isDriver() || isAttendant()) && 
+          resource.data.assignedBus == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedBus;
+      }
+    }
+
+    // ==========================================
+    // BUSES COLLECTION (Root level)
+    // ==========================================
+    match /buses/{busId} {
+      // Admin can read all buses
+      allow read: if isAdmin();
+      
+      // Drivers can read buses they're assigned to
+      allow read: if isDriver() && request.auth.uid == resource.data.assignedDriver;
+      
+      // Attendants can read buses they're assigned to
+      allow read: if isAttendant() && request.auth.uid in resource.data.assignedAttendants;
+      
+      // Parents can read buses their children are assigned to
+      allow read: if isParent();
+      
+      // Only admin can write to buses
+      allow write: if isAdmin();
+      
+      // Drivers can update location and check-in status
+      allow update: if isDriver() && request.auth.uid == resource.data.assignedDriver &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['assignedDriver', 'assignedAttendants', 'createdAt']);
+    }
+
+    // ==========================================
+    // ROUTES COLLECTION
+    // ==========================================
+    match /routes/{routeId} {
+      // Admin can read/write all routes
+      allow read, write: if isAdmin();
+      
+      // Drivers can read routes for their assigned buses
+      allow read: if isDriver() && 
+        exists(/databases/$(database)/documents/buses/$(resource.data.busId)) &&
+        get(/databases/$(database)/documents/buses/$(resource.data.busId)).data.assignedDriver == request.auth.uid;
+      
+      // Attendants can read routes for their assigned buses
+      allow read: if isAttendant() && 
+        exists(/databases/$(database)/documents/buses/$(resource.data.busId)) &&
+        request.auth.uid in get(/databases/$(database)/documents/buses/$(resource.data.busId)).data.assignedAttendants;
+      
+      // Parents can read routes
+      allow read: if isParent();
+    }
+
+    // ==========================================
+    // CHECK-INS COLLECTION
+    // ==========================================
+    match /checkIns/{checkInId} {
+      // Admin can read all check-ins
+      allow read: if isAdmin();
+      
+      // Attendants can record check-ins for their bus
+      allow create: if isAttendant() && resource.data.recordedBy == request.auth.uid;
+      allow write: if isAttendant() && resource.data.recordedBy == request.auth.uid;
+      
+      // Drivers can read check-ins for their bus
+      allow read: if isDriver() && resource.data.busId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedBus;
+      
+      // Parents can read check-ins for their children
+      allow read: if isParent();
+    }
+
+    // ==========================================
+    // LIVE LOCATIONS COLLECTION (Real-time updates)
+    // ==========================================
+    match /liveLocations/{userId} {
+      // User can write their own location
+      allow write: if isOwnUser(userId);
+      
+      // Admin can read all locations
+      allow read: if isAdmin();
+      
+      // Drivers can read their own location
+      allow read: if isDriver() && isOwnUser(userId);
+      
+      // Attendants on the same bus can read location
+      allow read: if isAttendant() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedBus == 
+        get(/databases/$(database)/documents/users/$(userId)).data.assignedBus;
+      
+      // Parents can read driver locations for buses their children are on
+      allow read: if isParent();
+    }
+
+    // ==========================================
+    // INCIDENT REPORTS COLLECTION
+    // ==========================================
+    match /incidents/{incidentId} {
+      // Admin can read/write all incidents
+      allow read, write: if isAdmin();
+      
+      // Drivers and attendants can create incidents
+      allow create: if (isDriver() || isAttendant()) && resource.data.reportedBy == request.auth.uid;
+      
+      // Drivers and attendants can read incidents they reported
+      allow read: if (isDriver() || isAttendant()) && resource.data.reportedBy == request.auth.uid;
+      
+      // Parents can read incidents related to their children
+      allow read: if isParent();
+    }
+
+    // ==========================================
+    // DEFAULT DENY
+    // ==========================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
