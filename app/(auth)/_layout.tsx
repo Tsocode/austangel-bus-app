@@ -8,6 +8,7 @@ export default function AuthLayout() {
         presentation: 'modal',
       }}>
       <Stack.Screen name="login" />
+      <Stack.Screen name="select-service" />
     </Stack>
   );
 }

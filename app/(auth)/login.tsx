@@ -1,4 +1,5 @@
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import {
@@ -27,6 +28,7 @@ const ROLES: { label: string; value: UserRole; description: string }[] = [
 type AuthMode = 'signin' | 'signup';
 
 export default function AuthLandingScreen() {
+  const router = useRouter();
   const [mode, setMode] = useState<AuthMode>('signin');
   const [role, setRole] = useState<UserRole>('parent');
   const [email, setEmail] = useState('');
@@ -95,6 +97,8 @@ export default function AuthLandingScreen() {
       Keyboard.dismiss();
       if (mode === 'signin') {
         await signInWithEmailAndPassword(auth, email.trim(), password);
+        // Navigate to service selector after successful sign in
+        router.replace('/(auth)/select-service');
       } else {
         const { firstName, lastName } = splitName(displayName);
         const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
@@ -102,11 +106,15 @@ export default function AuthLandingScreen() {
           id: credential.user.uid,
           email: credential.user.email ?? email.trim(),
           role: 'parent',
+          primaryService: 'school',
+          schoolRole: 'parent',
           firstName,
           lastName,
           displayName: displayName || credential.user.email || 'Austangel User',
           createdAt: Date.now(),
         });
+        // Navigate to service selector after successful sign up
+        router.replace('/(auth)/select-service');
       }
 
     } catch (error) {
