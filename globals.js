@@ -1,45 +1,63 @@
 // Global polyfills for Expo 58 + React Native 0.88 compatibility
 // This must be imported FIRST before anything else
+// Runs at module evaluation time, before Hermes engine fully initializes
 
-// Intercept TurboModuleRegistry to prevent native module errors in Expo Go
-if (typeof global.__turboModuleProxy === 'undefined') {
-  const mockTurboModule = {
-    readAsText: () => '',
-    readAsDataURL: () => 'data:text/plain;base64,',
-    readAsArrayBuffer: () => new ArrayBuffer(0),
-  };
+// ============================================================================
+// CRITICAL: Intercept TurboModuleRegistry BEFORE any native module loads
+// ============================================================================
 
-  if (typeof global.TurboModuleRegistry === 'undefined') {
-    global.TurboModuleRegistry = {
-      get: () => mockTurboModule,
-      getEnforcing: () => mockTurboModule,
-    };
-  } else {
-    const originalGet = global.TurboModuleRegistry.get;
-    const originalGetEnforcing = global.TurboModuleRegistry.getEnforcing;
+// Save the original TurboModuleRegistry if it exists
+const OriginalTurboModuleRegistry = global.TurboModuleRegistry;
+
+// Mock TurboModuleRegistry to intercept ALL native module loading attempts
+global.TurboModuleRegistry = {
+  // Catch all getEnforcing calls and return mock instead of throwing
+  getEnforcing(name) {
+    console.warn(`[Polyfill] TurboModuleRegistry.getEnforcing called for "${name}" - returning mock`);
     
-    global.TurboModuleRegistry.get = function(name) {
-      try {
-        return originalGet.call(this, name);
-      } catch (e) {
-        console.warn(`TurboModule ${name} not found, returning mock`);
-        return mockTurboModule;
-      }
-    };
+    // Return appropriate mock based on module name
+    if (name === 'FileReaderModule') {
+      return {
+        readAsText: () => '',
+        readAsDataURL: () => 'data:text/plain;base64,',
+        readAsArrayBuffer: () => new ArrayBuffer(0),
+      };
+    }
     
-    global.TurboModuleRegistry.getEnforcing = function(name) {
-      if (name === 'FileReaderModule') {
-        return mockTurboModule;
-      }
-      try {
-        return originalGetEnforcing.call(this, name);
-      } catch (e) {
-        console.warn(`TurboModule ${name} not found, returning mock`);
-        return mockTurboModule;
-      }
-    };
-  }
-}
+    // For any other module, return a generic mock object
+    return new Proxy({}, {
+      get() {
+        return () => {};
+      },
+    });
+  },
+  
+  // Catch all get calls and return mock instead of null
+  get(name) {
+    console.warn(`[Polyfill] TurboModuleRegistry.get called for "${name}" - returning mock`);
+    
+    if (name === 'FileReaderModule') {
+      return {
+        readAsText: () => '',
+        readAsDataURL: () => 'data:text/plain;base64,',
+        readAsArrayBuffer: () => new ArrayBuffer(0),
+      };
+    }
+    
+    return new Proxy({}, {
+      get() {
+        return () => {};
+      },
+    });
+  },
+  
+  // Allow other methods to pass through if they existed
+  ...OriginalTurboModuleRegistry,
+};
+
+// ============================================================================
+// Global API Polyfills (FormData, Blob, FileReader, File)
+// ============================================================================
 
 if (typeof global.FormData === 'undefined') {
   global.FormData = class FormData {
@@ -96,4 +114,60 @@ if (typeof global.File === 'undefined') {
     }
   };
 }
+
+// ============================================================================
+// URL and URLSearchParams Polyfills
+// ============================================================================
+
+if (typeof global.URL === 'undefined') {
+  global.URL = class URL {
+    constructor(url, base) {
+      this.href = url;
+      this.pathname = '';
+      this.search = '';
+    }
+  };
+}
+
+if (typeof global.URLSearchParams === 'undefined') {
+  global.URLSearchParams = class URLSearchParams {
+    constructor(init) {
+      this.params = new Map();
+      if (typeof init === 'string') {
+        const pairs = init.split('&');
+        pairs.forEach(pair => {
+          const [key, value] = pair.split('=');
+          this.params.set(decodeURIComponent(key), decodeURIComponent(value || ''));
+        });
+      }
+    }
+
+    get(name) {
+      return this.params.get(name) || null;
+    }
+
+    has(name) {
+      return this.params.has(name);
+    }
+
+    set(name, value) {
+      this.params.set(name, value);
+    }
+
+    forEach(callback) {
+      this.params.forEach((value, key) => {
+        callback(value, key);
+      });
+    }
+
+    toString() {
+      const pairs = [];
+      this.params.forEach((value, key) => {
+        pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
+      });
+      return pairs.join('&');
+    }
+  };
+}
+
 
