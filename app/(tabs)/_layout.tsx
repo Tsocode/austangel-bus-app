@@ -43,7 +43,7 @@ export default function TabLayout() {
         tabBarActiveTintColor: theme.tint,
         tabBarInactiveTintColor: theme.tabIconDefault,
         headerShown: false,
-        tabBarButton: HapticTab,
+        tabBarButton: HapticTab as any,
         tabBarBackground: TabBarBackground,
         tabBarStyle: Platform.select({
           ios: {
