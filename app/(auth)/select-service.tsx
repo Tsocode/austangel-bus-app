@@ -30,7 +30,7 @@ export default function SelectServiceScreen() {
       if (service === 'school') {
         router.replace('/(tabs)/track');
       } else {
-        router.replace('/(travel)/trips');
+        router.replace('/(travel)');
       }
     } catch (error) {
       console.error('Failed to switch service:', error);
