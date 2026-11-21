@@ -16,10 +16,9 @@ if (Platform.OS !== 'web') {
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { AppearanceProvider } from '@/providers/AppearanceProvider';
 import { AuthProvider, useAuthContext } from '@/providers/AuthProvider';
-import { getLandingRouteForRole } from '@/utils/navigation';
 
 function RootNavigation() {
-  const { status, role } = useAuthContext();
+  const { status, primaryService } = useAuthContext();
   const segments = useSegments();
   const router = useRouter();
 
@@ -37,10 +36,17 @@ function RootNavigation() {
       return;
     }
 
+    // After login, show service selector if no service chosen yet
     if (inAuthGroup) {
-      router.replace(getLandingRouteForRole(role));
+      if (!primaryService) {
+        router.replace('/(auth)/select-service');
+      } else if (primaryService === 'school') {
+        router.replace('/(tabs)/track');
+      } else {
+        router.replace('/(travel)');
+      }
     }
-  }, [status, role, segments, router]);
+  }, [status, primaryService, segments, router]);
 
   if (status === 'loading') {
     return (
@@ -54,6 +60,7 @@ function RootNavigation() {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Screen name="(auth)" />
       <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="(travel)" />
       <Stack.Screen name="+not-found" />
     </Stack>
   );
