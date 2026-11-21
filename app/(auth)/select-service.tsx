@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ActivityIndicator } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
@@ -8,15 +8,9 @@ import { ServiceType } from '@/models/user';
 
 export default function SelectServiceScreen() {
   const router = useRouter();
-  const { profile, switchService, primaryService } = useAuthContext();
+  const { switchService } = useAuthContext();
   const [loading, setLoading] = useState(false);
-  const [selectedService, setSelectedService] = useState<ServiceType>(primaryService || 'school');
-
-  useEffect(() => {
-    if (!profile) {
-      router.replace('/(auth)/login');
-    }
-  }, [profile]);
+  const [selectedService, setSelectedService] = useState<ServiceType>('school');
 
   const handleServiceSelect = async (service: ServiceType) => {
     setLoading(true);
@@ -26,12 +20,8 @@ export default function SelectServiceScreen() {
         await switchService(service);
       }
       
-      // Navigate to the appropriate dashboard
-      if (service === 'school') {
-        router.replace('/(tabs)/track');
-      } else {
-        router.replace('/(travel)');
-      }
+      // Navigate to login screen for selected service
+      router.replace('/(auth)/login');
     } catch (error) {
       console.error('Failed to switch service:', error);
       setLoading(false);
@@ -45,7 +35,7 @@ export default function SelectServiceScreen() {
         <View style={styles.header}>
           <Text style={styles.title}>Choose Your Service</Text>
           <Text style={styles.subtitle}>
-            Welcome back, {profile?.firstName || profile?.displayName || 'User'}!
+            Select which service you'd like to use
           </Text>
         </View>
 
@@ -55,7 +45,7 @@ export default function SelectServiceScreen() {
             styles.serviceCard,
             selectedService === 'school' && styles.serviceCardSelected,
           ]}
-          onPress={() => handleServiceSelect('school')}
+          onPress={() => setSelectedService('school')}
           disabled={loading}
           activeOpacity={0.7}>
           <View style={styles.iconContainer}>
@@ -79,7 +69,7 @@ export default function SelectServiceScreen() {
             styles.serviceCard,
             selectedService === 'travel' && styles.serviceCardSelected,
           ]}
-          onPress={() => handleServiceSelect('travel')}
+          onPress={() => setSelectedService('travel')}
           disabled={loading}
           activeOpacity={0.7}>
           <View style={styles.iconContainer}>
@@ -106,7 +96,7 @@ export default function SelectServiceScreen() {
             <ActivityIndicator color="#fff" />
           ) : (
             <>
-              <Text style={styles.continueButtonText}>Continue to App</Text>
+              <Text style={styles.continueButtonText}>Continue to Login</Text>
               <MaterialIcons name="arrow-forward" size={20} color="#fff" />
             </>
           )}
