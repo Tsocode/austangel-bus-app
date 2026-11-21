@@ -29,28 +29,22 @@ function RootNavigation() {
 
     const inAuthGroup = segments[0] === '(auth)';
 
-    // Show service selector FIRST (before login)
-    if (!primaryService) {
+    // If NOT authorized (not logged in), show service selector FIRST
+    if (status !== 'authorized') {
       if (!inAuthGroup || segments[1] !== 'select-service') {
         router.replace('/(auth)/select-service');
       }
       return;
     }
 
-    // Then show login if not authorized
-    if (status !== 'authorized') {
-      if (!inAuthGroup || segments[1] !== 'login') {
-        router.replace('/(auth)/login');
-      }
-      return;
-    }
-
-    // After login, show appropriate dashboard
-    if (inAuthGroup) {
-      if (primaryService === 'school') {
-        router.replace('/(tabs)/track');
-      } else {
-        router.replace('/(travel)');
+    // After login is successful, show appropriate dashboard based on primaryService
+    if (status === 'authorized') {
+      if (inAuthGroup) {
+        if (primaryService === 'school') {
+          router.replace('/(tabs)/track');
+        } else {
+          router.replace('/(travel)');
+        }
       }
     }
   }, [status, primaryService, segments, router]);
