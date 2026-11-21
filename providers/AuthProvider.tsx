@@ -1,7 +1,7 @@
 import { User as FirebaseUser, onAuthStateChanged } from 'firebase/auth';
 import { ReactNode, createContext, useContext, useEffect, useMemo, useState } from 'react';
 
-import { AustangelUser, UserRole } from '@/models/user';
+import { AustangelUser, UserRole, ServiceType, SchoolRole, TravelRole } from '@/models/user';
 import { auth } from '@/services/firebase';
 import { getUserProfile, upsertUserProfile } from '@/services/firestore/users';
 
@@ -13,6 +13,8 @@ interface AuthContextValue {
   profile: AustangelUser | null;
   role: UserRole | null;
   reloadProfile: () => Promise<void>;
+  primaryService?: ServiceType;
+  switchService?: (service: ServiceType) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -29,6 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [profile, setProfile] = useState<AustangelUser | null>(null);
   const [status, setStatus] = useState<AuthStatus>('loading');
+  const [primaryService, setPrimaryService] = useState<ServiceType>('school');
 
   const splitName = (value?: string | null) => {
     const trimmed = value?.trim();
@@ -51,10 +54,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         userProfile = {
           id: firebaseAccount.uid,
           email: firebaseAccount.email ?? '',
-          role: 'parent',
+          role: 'parent' as UserRole,
+          primaryService: 'school',
+          schoolRole: 'parent' as SchoolRole,
           firstName,
           lastName,
-          displayName: firebaseAccount.displayName ?? firebaseAccount.email ?? 'Austangel Parent',
+          displayName: firebaseAccount.displayName ?? firebaseAccount.email ?? 'Austangel User',
           createdAt: Date.now(),
         };
 
@@ -62,6 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       setProfile(userProfile);
+      setPrimaryService(userProfile.primaryService ?? 'school');
       setStatus('authorized');
     } catch (error) {
       console.warn('Failed to load profile from Firestore, using fallback profile.', error);
@@ -69,14 +75,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const fallbackProfile: AustangelUser = {
         id: firebaseAccount.uid,
         email: firebaseAccount.email ?? '',
-        role: 'parent',
+        role: 'parent' as UserRole,
+        primaryService: 'school',
+        schoolRole: 'parent' as SchoolRole,
         firstName,
         lastName,
-        displayName: firebaseAccount.displayName ?? firebaseAccount.email ?? 'Austangel Parent',
+        displayName: firebaseAccount.displayName ?? firebaseAccount.email ?? 'Austangel User',
         createdAt: Date.now(),
       };
 
       setProfile(fallbackProfile);
+      setPrimaryService('school');
       setStatus('authorized');
     }
   };
@@ -99,19 +108,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => unsubscribe();
   }, []);
 
+  const switchService = async (service: ServiceType) => {
+    if (profile) {
+      setPrimaryService(service);
+      await upsertUserProfile({
+        ...profile,
+        primaryService: service,
+      });
+    }
+  };
+
   const value = useMemo<AuthContextValue>(
     () => ({
       status,
       firebaseUser,
       profile,
       role: profile?.role ?? null,
+      primaryService,
+      switchService,
       reloadProfile: async () => {
         if (firebaseUser) {
           await loadProfile(firebaseUser);
         }
       },
     }),
-    [status, firebaseUser, profile]
+    [status, firebaseUser, profile, primaryService]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
