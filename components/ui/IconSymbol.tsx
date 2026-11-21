@@ -45,7 +45,7 @@ export function IconSymbol({
 }) {
   const mapping = MAPPING[name];
   if (mapping.set === 'community') {
-    return <MaterialCommunityIcons color={color} size={size} name={mapping.name} style={style} />;
+    return <MaterialCommunityIcons color={color} size={size} name={mapping.name as any} style={style} />;
   }
-  return <MaterialIcons color={color} size={size} name={mapping.name} style={style} />;
+  return <MaterialIcons color={color} size={size} name={mapping.name as any} style={style} />;
 }

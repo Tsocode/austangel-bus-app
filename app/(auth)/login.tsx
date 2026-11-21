@@ -101,7 +101,7 @@ export default function AuthLandingScreen() {
         await upsertUserProfile({
           id: credential.user.uid,
           email: credential.user.email ?? email.trim(),
-          role,
+          role: 'parent',
           firstName,
           lastName,
           displayName: displayName || credential.user.email || 'Austangel User',
@@ -148,34 +148,40 @@ export default function AuthLandingScreen() {
           ))}
         </View>
 
-        <Text style={styles.sectionLabel}>Select your role</Text>
-        <View style={styles.roleRow}>
-          {ROLES.map((option) => (
-            <Pressable
-              key={option.value}
-              style={[styles.roleChip, role === option.value && styles.roleChipActive]}
-              onPress={() => setRole(option.value)}>
-              <Text
-                style={[
-                  styles.roleChipText,
-                  role === option.value && styles.roleChipTextActive,
-                ]}>
-                {option.label}
-              </Text>
-              {mode === 'signup' ? (
-                <Text style={styles.roleHint}>{option.description}</Text>
-              ) : null}
-            </Pressable>
-          ))}
-        </View>
+        {mode === 'signin' && (
+          <>
+            <Text style={styles.sectionLabel}>Select your role</Text>
+            <View style={styles.roleRow}>
+              {ROLES.map((option) => (
+                <Pressable
+                  key={option.value}
+                  style={[styles.roleChip, role === option.value && styles.roleChipActive]}
+                  onPress={() => setRole(option.value)}>
+                  <Text
+                    style={[
+                      styles.roleChipText,
+                      role === option.value && styles.roleChipTextActive,
+                    ]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </>
+        )}
 
         {mode === 'signup' && (
-          <TextInput
-            placeholder="Full name"
-            value={displayName}
-            onChangeText={setDisplayName}
-            style={styles.input}
-          />
+          <>
+            <Text style={styles.infoText}>
+              New accounts are created as Parents. Contact an administrator to change your role.
+            </Text>
+            <TextInput
+              placeholder="Full name"
+              value={displayName}
+              onChangeText={setDisplayName}
+              style={styles.input}
+            />
+          </>
         )}
         {mode === 'signup' && fieldErrors.displayName ? (
           <Text style={styles.errorText}>{fieldErrors.displayName}</Text>
@@ -345,6 +351,17 @@ const styles = StyleSheet.create({
   roleHint: {
     fontSize: 12,
     color: '#64748b',
+  },
+  infoText: {
+    fontSize: 13,
+    color: '#16a34a',
+    backgroundColor: '#f0fdf4',
+    borderLeftWidth: 3,
+    borderLeftColor: '#16a34a',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 4,
+    lineHeight: 18,
   },
   input: {
     borderWidth: 1,
