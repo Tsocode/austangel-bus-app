@@ -1,5 +1,27 @@
 # Testing Guide for Austangel Bus App (Expo 58)
 
+## 🔴 Latest Fixes Applied (Current Session)
+
+### Critical Runtime Issues Resolved:
+
+1. **TurboModuleRegistry FileReaderModule Error** ✅
+   - Problem: `Invariant Violation: 'FileReaderModule' could not be found`
+   - Solution: Enhanced globals.js with comprehensive TurboModuleRegistry mock
+   - Mocks: FileReaderModule, BlobModule, NativeEventEmitter
+   - Status: Ready for testing on device
+
+2. **React-Native-Maps Native Import Error** ✅
+   - Problem: Web bundler tries to import native-only react-native-maps
+   - Solution: Conditional import in track.tsx using Platform.OS check
+   - Status: Web and native bundlers both working
+
+3. **Stub Module Resolution** ✅
+   - Added metro.config.js mappings for missing modules
+   - Created FileReaderModule.js stub
+   - Status: All stubs in place
+
+---
+
 ## ✅ Completed Tests
 
 ### 1. **Unit Tests** - PASSED ✅
@@ -46,7 +68,7 @@ Best for iOS/Android real devices with Expo Go installed.
 #### Run the App:
 ```bash
 cd C:\Users\hp\austangel-bus-app
-npx expo start -c
+npm run start
 ```
 
 **You should see:**
