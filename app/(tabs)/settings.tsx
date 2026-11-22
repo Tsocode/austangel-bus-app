@@ -1,11 +1,15 @@
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View, TextInput, Alert } from 'react-native';
 import { useState } from 'react';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useThemePreference } from '@/providers/AppearanceProvider';
+import { useAuthContext } from '@/providers/AuthProvider';
+import { UserRole } from '@/models/user';
+import { upsertUserProfile } from '@/services/firestore/users';
 
 const APPEARANCE_OPTIONS = [
   { label: 'System', value: 'system' },
@@ -20,7 +24,10 @@ const UNIT_OPTIONS = [
 
 export default function SettingsScreen() {
   const { preference, setPreference } = useThemePreference();
+  const { profile, primaryService, reloadProfile } = useAuthContext();
   const [unit, setUnit] = useState<'km' | 'mi'>('km');
+  const [adminCode, setAdminCode] = useState('');
+  const [showAdminCode, setShowAdminCode] = useState(false);
   const colorScheme = useColorScheme() ?? 'light';
   const isDark = colorScheme === 'dark';
   const theme = Colors[colorScheme];
@@ -35,6 +42,35 @@ export default function SettingsScreen() {
     segmentBg: isDark ? '#0b1220' : '#F1F5F9',
     segmentActive: isDark ? '#1f2937' : '#111827',
     toggleTrack: isDark ? '#1f2937' : '#e5e7eb',
+  };
+
+  const ADMIN_CODE = 'AUSTANGEL2024'; // Simple hardcoded for MVP, replace with backend check
+
+  const handlePromoteToAdmin = async () => {
+    if (adminCode.toUpperCase() !== ADMIN_CODE) {
+      Alert.alert('Invalid Code', 'The admin code you entered is incorrect.');
+      setAdminCode('');
+      return;
+    }
+
+    if (!profile) {
+      Alert.alert('Error', 'User profile not found');
+      return;
+    }
+
+    try {
+      await upsertUserProfile({
+        ...profile,
+        role: 'admin' as UserRole,
+      });
+      await reloadProfile();
+      Alert.alert('Success', 'Your role has been updated to Admin. Please refresh the app.');
+      setAdminCode('');
+      setShowAdminCode(false);
+    } catch (error) {
+      Alert.alert('Error', 'Failed to update role. Please try again.');
+      console.error('Role update error:', error);
+    }
   };
 
   return (
@@ -142,8 +178,51 @@ export default function SettingsScreen() {
       <ThemedView style={[styles.card, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
         <ThemedText type="subtitle">Account</ThemedText>
         <Text style={[styles.subtle, { color: palette.textMuted }]}>
-          Profile editing and privacy controls will appear here soon.
+          Email: {profile?.email}
         </Text>
+        <Text style={[styles.subtle, { color: palette.textMuted }]}>
+          Current Role: <Text style={{ fontWeight: '700', color: palette.textStrong }}>{profile?.role}</Text>
+        </Text>
+        {primaryService === 'school' && profile?.role !== 'admin' && (
+          <View style={{ marginTop: 12, gap: 10 }}>
+            <Text style={[styles.subtle, { color: palette.textMuted, fontSize: 12 }]}>
+              Have an admin code? Enter it below to elevate your role.
+            </Text>
+            <View style={[styles.adminCodeInput, { borderColor: palette.border, backgroundColor: isDark ? '#1f2937' : '#f9fafb' }]}>
+              <TextInput
+                placeholder="Enter admin code"
+                secureTextEntry={!showAdminCode}
+                value={adminCode}
+                onChangeText={setAdminCode}
+                style={[styles.input, { color: palette.textStrong }]}
+                placeholderTextColor={palette.textMuted}
+              />
+              <Pressable
+                onPress={() => setShowAdminCode(!showAdminCode)}
+                style={{ padding: 8 }}>
+                <MaterialIcons
+                  name={showAdminCode ? 'visibility-off' : 'visibility'}
+                  size={18}
+                  color={palette.textMuted}
+                />
+              </Pressable>
+            </View>
+            <Pressable
+              style={[styles.adminButton, { backgroundColor: theme.tint }]}
+              onPress={handlePromoteToAdmin}
+              accessibilityRole="button">
+              <Text style={styles.adminButtonText}>Verify & Promote to Admin</Text>
+            </Pressable>
+          </View>
+        )}
+        {profile?.role === 'admin' && (
+          <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <MaterialIcons name="verified" size={16} color="#16a34a" />
+            <Text style={{ color: '#16a34a', fontWeight: '600', fontSize: 13 }}>
+              Admin Access Enabled
+            </Text>
+          </View>
+        )}
       </ThemedView>
 
       {__DEV__ ? (
@@ -234,5 +313,28 @@ const styles = StyleSheet.create({
   devButtonText: {
     color: '#fff',
     fontWeight: '700',
+  },
+  adminCodeInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 44,
+  },
+  input: {
+    flex: 1,
+    fontSize: 14,
+  },
+  adminButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  adminButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
   },
 });
