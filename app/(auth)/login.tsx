@@ -23,7 +23,6 @@ const SCHOOL_ROLES: { label: string; value: UserRole; description: string }[] = 
   { label: 'Parent', value: 'parent', description: 'Track your child’s bus' },
   { label: 'Driver', value: 'driver', description: 'Update location & check-ins' },
   { label: 'Attendant', value: 'attendant', description: 'Check kids on/off the bus' },
-  { label: 'Admin', value: 'admin', description: 'Manage buses & permissions' },
 ];
 
 const TRAVEL_ROLES: { label: string; value: UserRole; description: string }[] = [

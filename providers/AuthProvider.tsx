@@ -109,8 +109,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const switchService = async (service: ServiceType) => {
+    // Allow switching service even without profile (during login flow)
+    setPrimaryService(service);
+    
     if (profile) {
-      setPrimaryService(service);
       await upsertUserProfile({
         ...profile,
         primaryService: service,
