@@ -156,7 +156,7 @@ export default function AuthLandingScreen() {
 
         <Text style={styles.title}>Welcome to Austangel</Text>
         <Text style={styles.subtitle}>
-          Sign in or create an account to manage buses, track rides, or check in students.
+          Sign in or create an account to get started.
         </Text>
 
         <View style={styles.modeToggle}>
@@ -201,7 +201,7 @@ export default function AuthLandingScreen() {
         {mode === 'signup' && (
           <>
             <Text style={styles.infoText}>
-              New accounts are created as Parents. Contact an administrator to change your role.
+              New accounts are created with the selected role. Contact support to change your role.
             </Text>
             <TextInput
               placeholder="Full name"

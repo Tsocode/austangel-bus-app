@@ -63,7 +63,7 @@ export default function SelectServiceScreen() {
           )}
         </TouchableOpacity>
 
-        {/* Vehicle & Travel Option */}
+        {/* Travel & Rides Option */}
         <TouchableOpacity
           style={[
             styles.serviceCard,
@@ -75,7 +75,7 @@ export default function SelectServiceScreen() {
           <View style={styles.iconContainer}>
             <MaterialIcons name="directions-car" size={48} color="#dc2626" />
           </View>
-          <Text style={styles.serviceName}>Vehicle & Travel</Text>
+          <Text style={styles.serviceName}>Travel & Rides</Text>
           <Text style={styles.serviceDescription}>
             Book rides, manage group trips, or offer private transportation services
           </Text>
