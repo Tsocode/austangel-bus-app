@@ -28,23 +28,43 @@ function RootNavigation() {
     }
 
     const inAuthGroup = segments[0] === '(auth)';
+    const currentScreen = segments[1];
 
-    // If NOT authorized (not logged in), show service selector FIRST
-    if (status !== 'authorized') {
-      if (!inAuthGroup || segments[1] !== 'select-service') {
-        router.replace('/(auth)/select-service');
-      }
+    // If user hasn't selected a service yet and is not in auth flow, go to service selector
+    if (!primaryService && !inAuthGroup) {
+      router.replace('/(auth)/select-service');
       return;
     }
 
-    // After login is successful, show appropriate dashboard based on primaryService
-    if (status === 'authorized') {
-      if (inAuthGroup) {
+    // If user is in auth group, let them continue through auth flow
+    if (inAuthGroup) {
+      // User selected service but not logged in yet, let login screen handle it
+      if (status !== 'authorized' && currentScreen !== 'select-service') {
+        return; // Stay on current auth screen (login)
+      }
+
+      // User is authorized, navigate to dashboard
+      if (status === 'authorized') {
         if (primaryService === 'school') {
           router.replace('/(tabs)/track');
         } else {
           router.replace('/(travel)');
         }
+      }
+
+      // User not authorized and trying to access dashboard, redirect to select-service
+      if (status !== 'authorized' && !primaryService && currentScreen !== 'select-service') {
+        router.replace('/(auth)/select-service');
+      }
+      return;
+    }
+
+    // If user is authorized but not in auth group, go to dashboard
+    if (status === 'authorized') {
+      if (primaryService === 'school') {
+        router.replace('/(tabs)/track');
+      } else {
+        router.replace('/(travel)');
       }
     }
   }, [status, primaryService, segments, router]);
