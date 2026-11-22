@@ -134,6 +134,16 @@ export default function AuthLandingScreen() {
       style={styles.container}
       behavior={Platform.select({ ios: 'padding', android: undefined })}>
       <View style={styles.form}>
+        {/* Back Button */}
+        <Pressable
+          style={styles.backButton}
+          onPress={() => router.replace('/(auth)/select-service')}
+          accessibilityRole="button"
+          accessibilityLabel="Go back to service selection">
+          <MaterialIcons name="arrow-back" size={24} color="#2563eb" />
+          <Text style={styles.backButtonText}>Back to Services</Text>
+        </Pressable>
+
         <Text style={styles.title}>Welcome to Austangel</Text>
         <Text style={styles.subtitle}>
           Sign in or create an account to manage buses, track rides, or check in students.
@@ -291,6 +301,19 @@ const styles = StyleSheet.create({
   },
   form: {
     gap: 14,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 0,
+    marginBottom: 4,
+  },
+  backButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2563eb',
   },
   title: {
     fontSize: 28,
