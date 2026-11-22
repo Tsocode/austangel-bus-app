@@ -202,36 +202,53 @@ export default function AuthLandingScreen() {
             <Text style={styles.infoText}>
               New accounts are created with the selected role. Contact support to change your role.
             </Text>
-            <TextInput
-              placeholder="Full name"
-              value={displayName}
-              onChangeText={setDisplayName}
-              style={styles.input}
-            />
+            <View>
+              <Text style={[styles.inputLabel, { color: mode === 'signup' ? '#1f2937' : '#6b7280' }]}>
+                Full Name
+              </Text>
+              <TextInput
+                placeholder="e.g., John Doe"
+                value={displayName}
+                onChangeText={setDisplayName}
+                style={styles.input}
+                placeholderTextColor="#9ca3af"
+              />
+            </View>
+            {mode === 'signup' && fieldErrors.displayName ? (
+              <Text style={styles.errorText}>{fieldErrors.displayName}</Text>
+            ) : null}
           </>
         )}
-        {mode === 'signup' && fieldErrors.displayName ? (
-          <Text style={styles.errorText}>{fieldErrors.displayName}</Text>
-        ) : null}
 
-        <TextInput
-          placeholder="Email"
-          autoCapitalize="none"
-          keyboardType="email-address"
-          value={email}
-          onChangeText={(value) => {
-            setEmail(value);
-            if (fieldErrors.email) {
-              setFieldErrors((prev) => ({ ...prev, email: undefined }));
-            }
-          }}
-          style={styles.input}
-          autoCorrect={false}
-          textContentType="username"
-          autoComplete="email"
-        />
+        <View>
+          <Text style={[styles.inputLabel, { color: '#1f2937' }]}>
+            Email Address
+          </Text>
+          <TextInput
+            placeholder="e.g., you@example.com"
+            autoCapitalize="none"
+            keyboardType="email-address"
+            value={email}
+            onChangeText={(value) => {
+              setEmail(value);
+              if (fieldErrors.email) {
+                setFieldErrors((prev) => ({ ...prev, email: undefined }));
+              }
+            }}
+            style={styles.input}
+            autoCorrect={false}
+            textContentType="username"
+            autoComplete="email"
+            placeholderTextColor="#9ca3af"
+          />
+        </View>
         {fieldErrors.email ? <Text style={styles.errorText}>{fieldErrors.email}</Text> : null}
-        <View style={styles.passwordWrapper}>
+
+        <View>
+          <Text style={[styles.inputLabel, { color: '#1f2937' }]}>
+            Password
+          </Text>
+          <View style={styles.passwordWrapper}>
           <TextInput
             placeholder="Password"
             secureTextEntry={!showPassword}
@@ -259,6 +276,7 @@ export default function AuthLandingScreen() {
               color="#6b7280"
             />
           </Pressable>
+          </View>
         </View>
         {fieldErrors.password ? <Text style={styles.errorText}>{fieldErrors.password}</Text> : null}
         {mode === 'signup' && hasTypedPassword ? (
@@ -365,6 +383,12 @@ const styles = StyleSheet.create({
     color: '#0f172a',
     marginTop: 8,
   },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 6,
+  },
   roleRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -411,6 +435,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     fontSize: 16,
     backgroundColor: '#f8fafc',
+    color: '#1f2937',
   },
   errorText: {
     color: '#dc2626',
