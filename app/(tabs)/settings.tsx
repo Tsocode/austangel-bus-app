@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View, TextInput, Alert } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View, TextInput, Alert, KeyboardAvoidingView, Platform, Keyboard, ActivityIndicator } from 'react-native';
 import { useState } from 'react';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 
@@ -8,8 +8,9 @@ import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useThemePreference } from '@/providers/AppearanceProvider';
 import { useAuthContext } from '@/providers/AuthProvider';
-import { UserRole } from '@/models/user';
-import { upsertUserProfile } from '@/services/firestore/users';
+import { promoteToAdminSecure } from '@/services/adminPromotion';
+import { auth, functions } from '@/services/firebase';
+import { httpsCallable } from 'firebase/functions';
 
 const APPEARANCE_OPTIONS = [
   { label: 'System', value: 'system' },
@@ -28,6 +29,8 @@ export default function SettingsScreen() {
   const [unit, setUnit] = useState<'km' | 'mi'>('km');
   const [adminCode, setAdminCode] = useState('');
   const [showAdminCode, setShowAdminCode] = useState(false);
+  const [isPromotingToAdmin, setIsPromotingToAdmin] = useState(false);
+  const [isRebuildingAccessMaps, setIsRebuildingAccessMaps] = useState(false);
   const colorScheme = useColorScheme() ?? 'light';
   const isDark = colorScheme === 'dark';
   const theme = Colors[colorScheme];
@@ -44,12 +47,12 @@ export default function SettingsScreen() {
     toggleTrack: isDark ? '#1f2937' : '#e5e7eb',
   };
 
-  const ADMIN_CODE = 'AUSTANGEL2024'; // Simple hardcoded for MVP, replace with backend check
-
+  /**
+   * Admin promotion is verified by the callable Cloud Function.
+   */
   const handlePromoteToAdmin = async () => {
-    if (adminCode.toUpperCase() !== ADMIN_CODE) {
-      Alert.alert('Invalid Code', 'The admin code you entered is incorrect.');
-      setAdminCode('');
+    if (!adminCode.trim()) {
+      Alert.alert('Empty Code', 'Please enter an admin promotion code.');
       return;
     }
 
@@ -58,23 +61,60 @@ export default function SettingsScreen() {
       return;
     }
 
+    // Prevent double submission
+    if (isPromotingToAdmin) {
+      return;
+    }
+
+    setIsPromotingToAdmin(true);
+
     try {
-      await upsertUserProfile({
-        ...profile,
-        role: 'admin' as UserRole,
-      });
-      await reloadProfile();
-      Alert.alert('Success', 'Your role has been updated to Admin. Please refresh the app.');
-      setAdminCode('');
-      setShowAdminCode(false);
+      // The callable verifies the code on the server and sets the custom claim.
+      const result = await promoteToAdminSecure(adminCode);
+
+      if (result.success) {
+        // Backend already updated the user role in Firestore
+        await auth.currentUser?.getIdToken(true);
+        // Reload profile to reflect the changes
+        await reloadProfile();
+        Alert.alert('Success! 🎉', 'You have been promoted to Admin. The changes will appear immediately.');
+        setAdminCode('');
+        setShowAdminCode(false);
+      } else {
+        // Validation failed (invalid code, already admin, etc.)
+        Alert.alert('Promotion Failed', result.error || 'Could not promote to admin.');
+      }
+    } catch (error: any) {
+      console.error('Admin promotion error:', error);
+      Alert.alert('Error', 'An error occurred during admin promotion. Please try again.');
+    } finally {
+      setIsPromotingToAdmin(false);
+    }
+  };
+
+  const handleRebuildAccessMaps = async () => {
+    setIsRebuildingAccessMaps(true);
+    try {
+      const rebuild = httpsCallable(functions, 'rebuildRealtimeAccessMaps');
+      const result = await rebuild();
+      const counts = result.data as { buses?: number; parents?: number; drivers?: number };
+      Alert.alert(
+        'Access maps updated',
+        `Synced ${counts.buses ?? 0} buses, ${counts.parents ?? 0} parents, and ${counts.drivers ?? 0} drivers.`
+      );
     } catch (error) {
-      Alert.alert('Error', 'Failed to update role. Please try again.');
-      console.error('Role update error:', error);
+      Alert.alert(
+        'Sync failed',
+        error instanceof Error ? error.message : 'Could not rebuild access maps.'
+      );
+    } finally {
+      setIsRebuildingAccessMaps(false);
     }
   };
 
   return (
-    <ScrollView contentContainerStyle={[styles.container, { backgroundColor: palette.screenBg }]}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+      <ScrollView contentContainerStyle={[styles.container, { backgroundColor: palette.screenBg }]} keyboardShouldPersistTaps="handled">
       <ThemedView style={[styles.hero, { backgroundColor: palette.heroBg }]}>
         <ThemedText type="title">Settings</ThemedText>
         <ThemedText type="default" style={[styles.subtle, { color: palette.textMuted }]}>
@@ -183,10 +223,12 @@ export default function SettingsScreen() {
         <Text style={[styles.subtle, { color: palette.textMuted }]}>
           Current Role: <Text style={{ fontWeight: '700', color: palette.textStrong }}>{profile?.role}</Text>
         </Text>
-        {primaryService === 'school' && profile?.role !== 'admin' && (
-          <View style={{ marginTop: 12, gap: 10 }}>
+        {primaryService === 'school' && (
+          <View style={{ marginTop: 12, gap: 10, paddingBottom: 80 }}>
             <Text style={[styles.subtle, { color: palette.textMuted, fontSize: 12 }]}>
-              Have an admin code? Enter it below to elevate your role.
+              {profile?.role === 'admin'
+                ? 'Enter the admin code to refresh secure server access.'
+                : 'Have an admin code? Enter it below to request admin access.'}
             </Text>
             <View style={[styles.adminCodeInput, { borderColor: palette.border, backgroundColor: isDark ? '#1f2937' : '#f9fafb' }]}>
               <TextInput
@@ -208,19 +250,37 @@ export default function SettingsScreen() {
               </Pressable>
             </View>
             <Pressable
-              style={[styles.adminButton, { backgroundColor: theme.tint }]}
+              style={[styles.adminButton, { backgroundColor: isPromotingToAdmin ? '#94a3b8' : theme.tint }]}
               onPress={handlePromoteToAdmin}
+              disabled={isPromotingToAdmin}
               accessibilityRole="button">
-              <Text style={styles.adminButtonText}>Verify & Promote to Admin</Text>
+              {isPromotingToAdmin ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.adminButtonText}>
+                  {profile?.role === 'admin' ? 'Refresh Admin Access' : 'Verify & Promote to Admin'}
+                </Text>
+              )}
             </Pressable>
           </View>
         )}
         {profile?.role === 'admin' && (
-          <View style={{ marginTop: 8, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <MaterialIcons name="verified" size={16} color="#16a34a" />
-            <Text style={{ color: '#16a34a', fontWeight: '600', fontSize: 13 }}>
-              Admin Access Enabled
-            </Text>
+          <View style={{ marginTop: 8, gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <MaterialIcons name="verified" size={16} color="#16a34a" />
+              <Text style={{ color: '#16a34a', fontWeight: '600', fontSize: 13 }}>
+                Admin Access Enabled
+              </Text>
+            </View>
+            <Pressable
+              style={[styles.adminButton, { backgroundColor: theme.tint }]}
+              onPress={handleRebuildAccessMaps}
+              disabled={isRebuildingAccessMaps}
+              accessibilityRole="button">
+              <Text style={styles.adminButtonText}>
+                {isRebuildingAccessMaps ? 'Syncing access maps…' : 'Sync Existing Firebase Access'}
+              </Text>
+            </Pressable>
           </View>
         )}
       </ThemedView>
@@ -242,7 +302,8 @@ export default function SettingsScreen() {
           </Pressable>
         </ThemedView>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 

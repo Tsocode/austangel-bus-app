@@ -1,5 +1,3 @@
-import '@/globals';
-
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
@@ -10,7 +8,11 @@ import { ActivityIndicator, View, Platform } from 'react-native';
 // Only import react-native-reanimated on native platforms
 // On web, Reanimated animations are not supported
 if (Platform.OS !== 'web') {
-  require('react-native-reanimated');
+  try {
+    require('react-native-reanimated');
+  } catch (error) {
+    console.debug('Reanimated not available');
+  }
 }
 
 import { useColorScheme } from '@/hooks/useColorScheme';
@@ -30,7 +32,7 @@ function RootNavigation() {
     const inAuthGroup = segments[0] === '(auth)';
     const inTabsGroup = segments[0] === '(tabs)';
     const inTravelGroup = segments[0] === '(travel)';
-    const currentScreen = segments[1];
+    const currentScreen = (segments as string[])[1];
 
     // If user hasn't selected a service yet and is not in auth flow, go to service selector
     if (!primaryService && !inAuthGroup) {

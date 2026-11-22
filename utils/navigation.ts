@@ -12,11 +12,8 @@ const SCHOOL_ROLE_LANDING: Record<SchoolRole, Href> = {
 
 // Vehicle & Travel routes
 const TRAVEL_ROLE_LANDING: Record<TravelRole, Href> = {
-  passenger: '/(travel)/trips',
-  chauffeur: '/(travel)/dashboard',
-  fleet_operator: '/(travel)/fleet',
-  travel_organizer: '/(travel)/groups',
-  travel_admin: '/(travel)/admin',
+  passenger: '/(travel)',
+  driver: '/(travel)',
 };
 
 export function getLandingRouteForRole(
@@ -27,13 +24,18 @@ export function getLandingRouteForRole(
     return '/(tabs)/home';
   }
 
-  // Determine which service based on role
+  if (service === 'travel') {
+    return TRAVEL_ROLE_LANDING[role as TravelRole] ?? '/(travel)';
+  }
+
+  // A driver can use either service; without an explicit service, keep the
+  // existing school transport default.
   const isSchoolRole = ['admin', 'driver', 'parent', 'attendant'].includes(role as string);
 
   if (isSchoolRole) {
     return SCHOOL_ROLE_LANDING[role as SchoolRole] ?? '/(tabs)/home';
   } else {
-    return TRAVEL_ROLE_LANDING[role as TravelRole] ?? '/(travel)/trips';
+    return TRAVEL_ROLE_LANDING[role as TravelRole] ?? '/(travel)';
   }
 }
 

@@ -1,245 +1,94 @@
-import { useRoute, useRouter } from 'expo-router';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, Animated, useEffect } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Animated, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useColorScheme } from '@/hooks/useColorScheme';
+
 import { Colors } from '@/constants/Colors';
+import { useColorScheme } from '@/hooks/useColorScheme';
+import { TravelTrip } from '@/models/travel-trip';
+import { getTrip } from '@/services/firebase-travel';
 
 export default function PaymentSuccessScreen() {
-  const route = useRoute();
   const router = useRouter();
+  const params = useLocalSearchParams<{ tripId?: string }>();
+  const tripId = typeof params.tripId === 'string' ? params.tripId : '';
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
-
-  const params = route.params as any;
-  const { tripId } = params || {};
-
-  const scaleAnim = new Animated.Value(0);
+  const scale = useRef(new Animated.Value(0)).current;
+  const [trip, setTrip] = useState<TravelTrip | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    Animated.spring(scaleAnim, {
-      toValue: 1,
-      useNativeDriver: true,
-      speed: 8,
-      bounciness: 6,
-    }).start();
-  }, []);
-
-  const handleBackToHome = () => {
-    router.replace('/(travel)');
-  };
-
-  const handleViewTrip = () => {
-    router.replace('/(travel)/monitor-trip');
-  };
+    let active = true;
+    getTrip(tripId)
+      .then((value) => {
+        if (!active) return;
+        const loaded = value as TravelTrip | null;
+        if (!loaded || loaded.paymentStatus !== 'paid') {
+          router.replace({ pathname: '/(travel)/payment', params: { tripId } });
+          return;
+        }
+        setTrip(loaded);
+        Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 8, bounciness: 6 }).start();
+      })
+      .catch((error) => console.error('Could not verify payment receipt:', error))
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [tripId, router, scale]);
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
       <View style={styles.content}>
-        {/* Success Animation */}
-        <Animated.View
-          style={[
-            styles.successContainer,
-            {
-              transform: [{ scale: scaleAnim }],
-            },
-          ]}>
-          <View style={[styles.successCircle, { backgroundColor: '#10b981' }]}>
-            <MaterialIcons name="check" size={80} color="#fff" />
-          </View>
+        <Animated.View style={[styles.successCircle, { transform: [{ scale }] }]}>
+          <MaterialIcons name="check" size={62} color="#fff" />
         </Animated.View>
-
-        {/* Success Message */}
-        <Text style={[styles.successTitle, { color: theme.text }]}>Payment Successful!</Text>
-        <Text style={[styles.successSubtitle, { color: theme.icon }]}>
-          Your ride has been booked and driver is on the way.
+        <Text style={[styles.title, { color: theme.text }]}>{loading ? 'Verifying payment…' : trip ? 'Payment confirmed' : 'Checking payment'}</Text>
+        <Text style={[styles.subtitle, { color: theme.icon }]}>
+          {trip ? 'Your ride request is paid and visible to verified drivers.' : 'We’ll show trip details as soon as Stripe confirms the payment.'}
         </Text>
-
-        {/* Trip Details */}
-        <View
-          style={[
-            styles.tripDetailsCard,
-            { backgroundColor: colorScheme === 'dark' ? '#2a2a2a' : '#f9fafb' },
-          ]}>
-          <View style={styles.detailRow}>
-            <View style={styles.detailLabel}>
-              <MaterialIcons name="confirmation-number" size={20} color={theme.tint} />
-              <View style={{ marginLeft: 12 }}>
-                <Text style={[styles.labelText, { color: theme.icon }]}>Trip ID</Text>
-                <Text style={[styles.valueText, { color: theme.text }]}>{tripId}</Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: theme.icon, opacity: 0.2 }]} />
-
-          <View style={styles.detailRow}>
-            <View style={styles.detailLabel}>
-              <MaterialIcons name="schedule" size={20} color={theme.tint} />
-              <View style={{ marginLeft: 12 }}>
-                <Text style={[styles.labelText, { color: theme.icon }]}>Estimated ETA</Text>
-                <Text style={[styles.valueText, { color: theme.text }]}>8-12 minutes</Text>
-              </View>
-            </View>
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: theme.icon, opacity: 0.2 }]} />
-
-          <View style={styles.detailRow}>
-            <View style={styles.detailLabel}>
-              <MaterialIcons name="notifications-active" size={20} color={theme.tint} />
-              <View style={{ marginLeft: 12 }}>
-                <Text style={[styles.labelText, { color: theme.icon }]}>Notifications</Text>
-                <Text style={[styles.valueText, { color: theme.text }]}>
-                  You'll receive updates as your driver approaches
-                </Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Tips */}
-        <View
-          style={[
-            styles.tipsCard,
-            { backgroundColor: colorScheme === 'dark' ? '#1a3a4a' : '#ecfdf5' },
-          ]}>
-          <MaterialIcons name="lightbulb" size={20} color="#10b981" />
-          <View style={{ marginLeft: 12, flex: 1 }}>
-            <Text style={[styles.tipTitle, { color: '#10b981' }]}>Pro Tip</Text>
-            <Text style={[styles.tipText, { color: theme.text }]}>
-              Share your trip with a friend or family member for added safety
-            </Text>
-          </View>
-        </View>
+        {trip ? <View style={[styles.card, { backgroundColor: colorScheme === 'dark' ? '#1f2937' : '#f9fafb' }]}>
+          <Detail label="Trip ID" value={trip.id} color={theme.text} />
+          <Detail label="Pickup" value={trip.pickupLocation.address} color={theme.text} />
+          <Detail label="Dropoff" value={trip.dropoffLocation.address} color={theme.text} />
+          <Detail label="Amount paid" value={formatAmount(trip)} color={theme.text} />
+        </View> : null}
       </View>
-
-      {/* Action Buttons */}
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity
-          style={[styles.secondaryButton, { borderColor: theme.tint, borderWidth: 2 }]}
-          onPress={handleBackToHome}>
-          <MaterialIcons name="home" size={18} color={theme.tint} />
-          <Text style={[styles.secondaryButtonText, { color: theme.tint }]}>Back to Home</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.primaryButton, { backgroundColor: theme.tint }]}
-          onPress={handleViewTrip}>
+      <View style={styles.buttons}>
+        <TouchableOpacity style={[styles.button, { backgroundColor: theme.tint }]} onPress={() => router.replace('/(travel)/monitor-trip')}>
           <MaterialIcons name="directions-car" size={18} color="#fff" />
-          <Text style={styles.primaryButtonText}>Track Trip</Text>
+          <Text style={styles.buttonText}>View trips</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.button, styles.secondary, { borderColor: theme.tint }]} onPress={() => router.replace('/(travel)')}>
+          <MaterialIcons name="home" size={18} color={theme.tint} />
+          <Text style={[styles.secondaryText, { color: theme.tint }]}>Travel home</Text>
         </TouchableOpacity>
       </View>
     </SafeAreaView>
   );
 }
 
+function Detail({ label, value, color }: { label: string; value: string; color: string }) {
+  return <View style={styles.detail}><Text style={[styles.label, { color }]}>{label}</Text><Text style={[styles.value, { color }]}>{value}</Text></View>;
+}
+
+function formatAmount(trip: TravelTrip) {
+  const amount = typeof trip.estimatedCostCents === 'number' ? trip.estimatedCostCents / 100 : trip.estimatedCost ?? 0;
+  return new Intl.NumberFormat(undefined, { style: 'currency', currency: (trip.currency ?? 'usd').toUpperCase() }).format(amount);
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  content: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingTop: 40,
-  },
-  successContainer: {
-    marginBottom: 32,
-  },
-  successCircle: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  successTitle: {
-    fontSize: 28,
-    fontWeight: '700',
-    marginBottom: 8,
-    textAlign: 'center',
-  },
-  successSubtitle: {
-    fontSize: 14,
-    marginBottom: 32,
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-  tripDetailsCard: {
-    width: '100%',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 16,
-  },
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  detailLabel: {
-    flexDirection: 'row',
-    flex: 1,
-  },
-  labelText: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  valueText: {
-    fontSize: 13,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  divider: {
-    height: 1,
-  },
-  tipsCard: {
-    width: '100%',
-    borderRadius: 10,
-    padding: 14,
-    flexDirection: 'row',
-  },
-  tipTitle: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  tipText: {
-    fontSize: 12,
-    marginTop: 4,
-    lineHeight: 16,
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 20,
-    paddingVertical: 20,
-    gap: 12,
-  },
-  secondaryButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 10,
-  },
-  secondaryButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  primaryButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 10,
-  },
-  primaryButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
+  container: { flex: 1 },
+  content: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 22 },
+  successCircle: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#059669', alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
+  title: { fontSize: 24, fontWeight: '700', textAlign: 'center' },
+  subtitle: { fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 8, marginBottom: 20 },
+  card: { width: '100%', borderRadius: 12, padding: 16, gap: 14 },
+  detail: { gap: 4 },
+  label: { fontSize: 11, opacity: 0.7 },
+  value: { fontSize: 13, fontWeight: '600' },
+  buttons: { padding: 20, gap: 10 },
+  button: { borderRadius: 9, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  secondary: { backgroundColor: 'transparent', borderWidth: 1.5 },
+  buttonText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+  secondaryText: { fontSize: 14, fontWeight: '700' },
 });

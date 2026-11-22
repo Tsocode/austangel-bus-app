@@ -1,9 +1,11 @@
 // services/firebase.ts
 
 import { FirebaseApp, FirebaseOptions, getApp, getApps, initializeApp } from 'firebase/app';
-import { Auth, getAuth, initializeAuth } from 'firebase/auth';
-import { Database, getDatabase } from 'firebase/database';
-import { Firestore, getFirestore } from 'firebase/firestore';
+import { Auth, connectAuthEmulator, getAuth, initializeAuth } from 'firebase/auth';
+import { connectDatabaseEmulator, Database, getDatabase } from 'firebase/database';
+import { connectFirestoreEmulator, Firestore, getFirestore } from 'firebase/firestore';
+import { connectFunctionsEmulator, Functions, getFunctions } from 'firebase/functions';
+import { Platform } from 'react-native';
 
 // Prefer env-backed config so keys can vary per environment; fall back to static config so dev still boots.
 const envConfig: FirebaseOptions = {
@@ -51,5 +53,15 @@ auth = getApps().length ? getAuth(app) : initializeAuth(app);
 
 const db: Firestore = getFirestore(app);
 const realtimeDb: Database = getDatabase(app);
+const functions: Functions = getFunctions(app);
 
-export { app, auth, db, realtimeDb };
+if (process.env.EXPO_PUBLIC_USE_FIREBASE_EMULATORS === 'true') {
+  const emulatorHost = process.env.EXPO_PUBLIC_FIREBASE_EMULATOR_HOST ??
+    (Platform.OS === 'android' ? '10.0.2.2' : '127.0.0.1');
+  connectAuthEmulator(auth, `http://${emulatorHost}:9099`, { disableWarnings: true });
+  connectFirestoreEmulator(db, emulatorHost, 8080);
+  connectDatabaseEmulator(realtimeDb, emulatorHost, 9000);
+  connectFunctionsEmulator(functions, emulatorHost, 5001);
+}
+
+export { app, auth, db, realtimeDb, functions };

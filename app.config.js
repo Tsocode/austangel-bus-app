@@ -48,6 +48,7 @@ export default ({ config }) => {
     },
     plugins: [
       'expo-router',
+      ['@stripe/stripe-react-native', {}],
       [
         'expo-splash-screen',
         {

@@ -1,350 +1,255 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  TextInput,
-  SafeAreaView,
-  ActivityIndicator,
-  useColorScheme,
-} from 'react-native';
+import { useState } from 'react';
+import { useRouter } from 'expo-router';
+import * as Location from 'expo-location';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '@react-navigation/native';
+import { useColorScheme } from '@/hooks/useColorScheme';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 
-const rideTypes = [
-  { id: 'standard', name: 'Standard', emoji: '🚗', baseRate: 2.5 },
-  { id: 'comfort', name: 'Comfort', emoji: '🚘', baseRate: 3.5 },
-  { id: 'premium', name: 'Premium', emoji: '🚙', baseRate: 5.0 },
+import { TravelBookingInput, TravelFareQuote, TravelServiceClass } from '@/models/travel-trip';
+import { createTripRequest, quoteTravelFare } from '@/services/firebase-travel';
+
+const rideClasses: { id: TravelServiceClass; name: string; detail: string }[] = [
+  { id: 'standard', name: 'Standard', detail: 'Everyday ride' },
+  { id: 'comfort', name: 'Comfort', detail: 'Extra comfort' },
+  { id: 'premium', name: 'Premium', detail: 'Premium vehicle' },
 ];
 
 export default function BookAppointmentScreen() {
+  const router = useRouter();
   const theme = useTheme();
   const colorScheme = useColorScheme();
-  const [pickupLocation, setPickupLocation] = useState('');
-  const [dropoffLocation, setDropoffLocation] = useState('');
+  const primaryColor = typeof theme.colors.primary === 'string' ? theme.colors.primary : '#0a7ea4';
+  const [pickup, setPickup] = useState('');
+  const [dropoff, setDropoff] = useState('');
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
-  const [passengers, setPassengers] = useState('');
-  const [rideType, setRideType] = useState('standard');
-  const [estimatedFare, setEstimatedFare] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const [passengerCount, setPassengerCount] = useState('1');
+  const [serviceClass, setServiceClass] = useState<TravelServiceClass>('standard');
+  const [booking, setBooking] = useState<TravelBookingInput | null>(null);
+  const [quote, setQuote] = useState<TravelFareQuote | null>(null);
+  const [loadingQuote, setLoadingQuote] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const calculateFare = () => {
-    if (!pickupLocation || !dropoffLocation || !passengers) {
-      alert('Please fill in all required fields');
-      return;
-    }
-
-    const selectedRide = rideTypes.find((r) => r.id === rideType);
-    const baseDistance = 10;
-    const fare = selectedRide?.baseRate! * baseDistance;
-    setEstimatedFare(fare);
+  const updateInput = (update: () => void) => {
+    update();
+    setBooking(null);
+    setQuote(null);
+    setErrorMessage(null);
   };
 
-  const handleProceedToPayment = async () => {
-    if (!estimatedFare) {
-      alert('Please calculate fare first');
-      return;
+  const buildBookingInput = async (): Promise<TravelBookingInput> => {
+    const cleanPickup = pickup.trim();
+    const cleanDropoff = dropoff.trim();
+    const count = Number(passengerCount);
+    if (cleanPickup.length < 3 || cleanDropoff.length < 3) {
+      throw new Error('Enter a pickup and dropoff address.');
+    }
+    if (!Number.isInteger(count) || count < 1 || count > 8) {
+      throw new Error('Passenger count must be between 1 and 8.');
+    }
+    const scheduledTime = new Date(`${date.trim()} ${time.trim()}`).getTime();
+    if (!date.trim() || !time.trim() || !Number.isFinite(scheduledTime) || scheduledTime < Date.now() - 60_000) {
+      throw new Error('Enter a valid future date and time.');
     }
 
-    setLoading(true);
+    const [pickupResult, dropoffResult] = await Promise.all([
+      Location.geocodeAsync(cleanPickup),
+      Location.geocodeAsync(cleanDropoff),
+    ]);
+    if (!pickupResult.length || !dropoffResult.length) {
+      throw new Error('We could not find one of those addresses. Check the spelling and try again.');
+    }
+    return {
+      pickupLocation: {
+        latitude: pickupResult[0].latitude,
+        longitude: pickupResult[0].longitude,
+        address: cleanPickup,
+      },
+      dropoffLocation: {
+        latitude: dropoffResult[0].latitude,
+        longitude: dropoffResult[0].longitude,
+        address: cleanDropoff,
+      },
+      passengers: count,
+      serviceClass,
+      scheduledTime,
+    };
+  };
+
+  const handleQuote = async () => {
+    setLoadingQuote(true);
+    setErrorMessage(null);
     try {
-      // TODO: Integrate with payment gateway
-      // For now, just navigate to payment confirmation
-      alert('Payment integration coming soon!');
+      const nextBooking = await buildBookingInput();
+      const nextQuote = await quoteTravelFare(nextBooking);
+      setBooking(nextBooking);
+      setQuote(nextQuote);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not calculate the fare.';
+      setErrorMessage(message);
+      Alert.alert('Fare quote unavailable', message);
     } finally {
-      setLoading(false);
+      setLoadingQuote(false);
     }
   };
+
+  const handleContinueToPayment = async () => {
+    setSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const bookingInput = booking ?? await buildBookingInput();
+      if (!quote) {
+        const nextQuote = await quoteTravelFare(bookingInput);
+        setBooking(bookingInput);
+        setQuote(nextQuote);
+      }
+      // The callable recalculates the fare from server-side pricing before it
+      // creates the pending trip. The client quote is display-only.
+      const created = await createTripRequest(bookingInput);
+      router.push({ pathname: '/(travel)/payment', params: { tripId: created.tripId } });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not create the booking.';
+      setErrorMessage(message);
+      Alert.alert('Booking failed', message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const formatFare = (value: TravelFareQuote) => new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: value.currency.toUpperCase(),
+  }).format(value.amountCents / 100);
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Pickup Location */}
-        <View style={styles.formSection}>
-          <Text style={[styles.label, { color: theme.colors.text }]}>Pickup Location</Text>
-          <View
-            style={[
-              styles.inputContainer,
-              {
-                borderColor: '#e5e7eb',
-                backgroundColor: colorScheme === 'dark' ? '#1f2937' : '#f9fafb',
-              },
-            ]}>
-            <MaterialIcons name="location-on" size={20} color="#2563eb" />
-            <TextInput
-              style={[styles.input, { color: theme.colors.text }]}
-              placeholder="Enter pickup location"
-              placeholderTextColor="#9ca3af"
-              value={pickupLocation}
-              onChangeText={setPickupLocation}
-            />
-          </View>
-        </View>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+      <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <Field label="Pickup location" icon="my-location" value={pickup} placeholder="Enter pickup address" onChangeText={(value) => updateInput(() => setPickup(value))} theme={theme} primaryColor={primaryColor} />
+          <Field label="Dropoff location" icon="location-on" value={dropoff} placeholder="Enter destination address" onChangeText={(value) => updateInput(() => setDropoff(value))} theme={theme} primaryColor={primaryColor} />
 
-        {/* Dropoff Location */}
-        <View style={styles.formSection}>
-          <Text style={[styles.label, { color: theme.colors.text }]}>Dropoff Location</Text>
-          <View
-            style={[
-              styles.inputContainer,
-              {
-                borderColor: '#e5e7eb',
-                backgroundColor: colorScheme === 'dark' ? '#1f2937' : '#f9fafb',
-              },
-            ]}>
-            <MaterialIcons name="location-on" size={20} color="#2563eb" />
-            <TextInput
-              style={[styles.input, { color: theme.colors.text }]}
-              placeholder="Enter dropoff location"
-              placeholderTextColor="#9ca3af"
-              value={dropoffLocation}
-              onChangeText={setDropoffLocation}
-            />
-          </View>
-        </View>
-
-        {/* Date & Time Row */}
-        <View style={styles.row}>
-          <View style={[styles.formSection, { flex: 1 }]}>
-            <Text style={[styles.label, { color: theme.colors.text }]}>Date</Text>
-            <View
-              style={[
-                styles.inputContainer,
-                {
-                  borderColor: '#e5e7eb',
-                  backgroundColor: colorScheme === 'dark' ? '#1f2937' : '#f9fafb',
-                },
-              ]}>
-              <MaterialIcons name="calendar-today" size={20} color="#2563eb" />
-              <TextInput
-                style={[styles.input, { color: theme.colors.text }]}
-                placeholder="MM/DD/YYYY"
-                placeholderTextColor="#9ca3af"
-                value={date}
-                onChangeText={setDate}
-              />
+          <View style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Field label="Date" icon="calendar-today" value={date} placeholder="MM/DD/YYYY" onChangeText={(value) => updateInput(() => setDate(value))} theme={theme} primaryColor={primaryColor} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Field label="Time" icon="access-time" value={time} placeholder="HH:MM AM/PM" onChangeText={(value) => updateInput(() => setTime(value))} theme={theme} primaryColor={primaryColor} />
             </View>
           </View>
 
-          <View style={[styles.formSection, { flex: 1, marginLeft: 12 }]}>
-            <Text style={[styles.label, { color: theme.colors.text }]}>Time</Text>
-            <View
-              style={[
-                styles.inputContainer,
-                {
-                  borderColor: '#e5e7eb',
-                  backgroundColor: colorScheme === 'dark' ? '#1f2937' : '#f9fafb',
-                },
-              ]}>
-              <MaterialIcons name="access-time" size={20} color="#2563eb" />
-              <TextInput
-                style={[styles.input, { color: theme.colors.text }]}
-                placeholder="HH:MM"
-                placeholderTextColor="#9ca3af"
-                value={time}
-                onChangeText={setTime}
-              />
-            </View>
-          </View>
-        </View>
+          <Field label="Passengers" icon="people" value={passengerCount} placeholder="1" keyboardType="number-pad" onChangeText={(value) => updateInput(() => setPassengerCount(value))} theme={theme} primaryColor={primaryColor} />
 
-        {/* Passengers */}
-        <View style={styles.formSection}>
-          <Text style={[styles.label, { color: theme.colors.text }]}>Number of Passengers</Text>
-          <View
-            style={[
-              styles.inputContainer,
-              {
-                borderColor: '#e5e7eb',
-                backgroundColor: colorScheme === 'dark' ? '#1f2937' : '#f9fafb',
-              },
-            ]}>
-            <MaterialIcons name="people" size={20} color="#2563eb" />
-            <TextInput
-              style={[styles.input, { color: theme.colors.text }]}
-              placeholder="Number of passengers"
-              placeholderTextColor="#9ca3af"
-              keyboardType="numeric"
-              value={passengers}
-              onChangeText={setPassengers}
-            />
-          </View>
-        </View>
-
-        {/* Ride Type Selection */}
-        <View style={styles.formSection}>
-          <Text style={[styles.label, { color: theme.colors.text }]}>Ride Type</Text>
-          <View style={styles.rideTypeContainer}>
-            {rideTypes.map((type) => (
+          <Text style={[styles.label, { color: theme.colors.text }]}>Ride class</Text>
+          <View style={styles.classRow}>
+            {rideClasses.map((item) => (
               <TouchableOpacity
-                key={type.id}
-                style={[
-                  styles.rideTypeCard,
-                  {
-                    borderColor: rideType === type.id ? '#2563eb' : '#e5e7eb',
-                    backgroundColor: rideType === type.id ? '#eff6ff' : 'transparent',
-                  },
-                ]}
-                onPress={() => setRideType(type.id)}>
-                <Text style={styles.rideTypeEmoji}>{type.emoji}</Text>
-                <Text style={[styles.rideTypeName, { color: theme.colors.text }]}>
-                  {type.name}
-                </Text>
-                <Text style={styles.rideTypePrice}>${(type.baseRate * 5).toFixed(0)}</Text>
+                key={item.id}
+                accessibilityRole="radio"
+                accessibilityState={{ selected: serviceClass === item.id }}
+                style={[styles.classCard, { borderColor: serviceClass === item.id ? primaryColor : '#d1d5db' }]}
+                onPress={() => updateInput(() => setServiceClass(item.id))}>
+                <Text style={[styles.className, { color: theme.colors.text }]}>{item.name}</Text>
+                <Text style={[styles.classDetail, { color: theme.colors.text }]}>{item.detail}</Text>
               </TouchableOpacity>
             ))}
           </View>
-        </View>
 
-        {/* Estimated Fare Card */}
-        <View
-          style={[
-            styles.fareCard,
-            {
-              backgroundColor: colorScheme === 'dark' ? '#1f2937' : '#f9fafb',
-              borderColor: '#e5e7eb',
-            },
-          ]}>
-          <View style={styles.fareContent}>
-            <View>
-              <Text style={[styles.fareLabel, { color: '#6b7280' }]}>Estimated Fare</Text>
-              <Text style={[styles.fareAmount, { color: '#2563eb' }]}>
-                ${estimatedFare.toFixed(2)}
+          <View style={[styles.quoteCard, { backgroundColor: colorSchemeBackground(colorScheme) }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.quoteLabel, { color: theme.colors.text }]}>Estimated fare</Text>
+              <Text style={[styles.quoteAmount, { color: primaryColor }]}>
+                {quote ? formatFare(quote) : 'Calculate to see price'}
               </Text>
+              {quote ? <Text style={[styles.quoteDistance, { color: theme.colors.text }]}>
+                Estimated route: {quote.estimatedRoadKm.toFixed(1)} km
+              </Text> : null}
             </View>
-            <TouchableOpacity style={styles.calculateButton} onPress={calculateFare}>
-              <Text style={styles.calculateButtonText}>Calculate</Text>
+            <TouchableOpacity style={[styles.quoteButton, { backgroundColor: primaryColor }]} onPress={handleQuote} disabled={loadingQuote || submitting}>
+              {loadingQuote ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Get quote</Text>}
             </TouchableOpacity>
           </View>
-        </View>
 
-        {/* Proceed Button */}
-        <TouchableOpacity
-          style={[styles.proceedButton, loading && styles.proceedButtonDisabled]}
-          onPress={handleProceedToPayment}
-          disabled={loading}>
-          {loading ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <>
-              <Text style={styles.proceedButtonText}>Proceed to Payment</Text>
-              <MaterialIcons name="arrow-forward" size={18} color="#ffffff" />
-            </>
-          )}
-        </TouchableOpacity>
-      </ScrollView>
-    </SafeAreaView>
+          {errorMessage ? <Text accessibilityRole="alert" style={styles.errorText}>{errorMessage}</Text> : null}
+
+          <TouchableOpacity style={[styles.continueButton, { backgroundColor: primaryColor, opacity: submitting ? 0.7 : 1 }]} onPress={handleContinueToPayment} disabled={submitting || loadingQuote}>
+            {submitting ? <ActivityIndicator color="#fff" /> : <>
+              <Text style={styles.buttonText}>Continue to secure payment</Text>
+              <MaterialIcons name="arrow-forward" size={18} color="#fff" />
+            </>}
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 
+function Field({
+  label, icon, value, placeholder, onChangeText, theme, primaryColor, keyboardType,
+}: {
+  label: string;
+  icon: keyof typeof MaterialIcons.glyphMap;
+  value: string;
+  placeholder: string;
+  onChangeText: (value: string) => void;
+  theme: ReturnType<typeof useTheme>;
+  primaryColor: string;
+  keyboardType?: 'default' | 'number-pad';
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={[styles.label, { color: theme.colors.text }]}>{label}</Text>
+      <View style={[styles.inputContainer, { borderColor: '#d1d5db' }]}>
+        <MaterialIcons name={icon} size={19} color={primaryColor} />
+        <TextInput
+          style={[styles.input, { color: theme.colors.text }]}
+          value={value}
+          placeholder={placeholder}
+          placeholderTextColor="#9ca3af"
+          onChangeText={onChangeText}
+          keyboardType={keyboardType}
+          autoCapitalize="words"
+        />
+      </View>
+    </View>
+  );
+}
+
+function colorSchemeBackground(colorScheme: string | null | undefined) {
+  return colorScheme === 'dark' ? '#1f2937' : '#f9fafb';
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  content: {
-    padding: 20,
-    paddingBottom: 30,
-  },
-  formSection: {
-    marginBottom: 20,
-  },
-  row: {
-    flexDirection: 'row',
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 10,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    height: 48,
-    gap: 10,
-  },
-  input: {
-    flex: 1,
-    fontSize: 14,
-    fontFamily: 'System',
-  },
-  rideTypeContainer: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  rideTypeCard: {
-    flex: 1,
-    borderWidth: 1.5,
-    borderRadius: 10,
-    padding: 12,
-    alignItems: 'center',
-  },
-  rideTypeEmoji: {
-    fontSize: 28,
-    marginBottom: 4,
-  },
-  rideTypeName: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  rideTypePrice: {
-    fontSize: 11,
-    color: '#059669',
-    fontWeight: '500',
-  },
-  fareCard: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-  },
-  fareContent: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  fareLabel: {
-    fontSize: 12,
-    fontWeight: '500',
-    marginBottom: 4,
-  },
-  fareAmount: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  calculateButton: {
-    backgroundColor: '#2563eb',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  calculateButtonText: {
-    color: '#ffffff',
-    fontWeight: '600',
-    fontSize: 13,
-  },
-  proceedButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#2563eb',
-    padding: 16,
-    borderRadius: 10,
-    gap: 10,
-    marginBottom: 20,
-  },
-  proceedButtonDisabled: {
-    opacity: 0.6,
-  },
-  proceedButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '600',
-  },
+  container: { flex: 1 },
+  content: { padding: 20, paddingBottom: 36 },
+  field: { marginBottom: 16, flex: 1 },
+  label: { fontSize: 13, fontWeight: '600', marginBottom: 7 },
+  inputContainer: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 10, height: 48, paddingHorizontal: 12 },
+  input: { flex: 1, fontSize: 14 },
+  row: { flexDirection: 'row', gap: 12 },
+  classRow: { flexDirection: 'row', gap: 8, marginBottom: 18 },
+  classCard: { flex: 1, borderWidth: 1.5, borderRadius: 10, padding: 11 },
+  className: { fontSize: 13, fontWeight: '700' },
+  classDetail: { fontSize: 10, marginTop: 4 },
+  quoteCard: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, padding: 16, marginBottom: 18 },
+  quoteLabel: { fontSize: 12 },
+  quoteAmount: { fontSize: 20, fontWeight: '700', marginTop: 4 },
+  quoteDistance: { fontSize: 11, marginTop: 3 },
+  quoteButton: { paddingHorizontal: 14, paddingVertical: 11, borderRadius: 8 },
+  continueButton: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, padding: 15, borderRadius: 10 },
+  buttonText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  errorText: { color: '#dc2626', marginBottom: 14, fontSize: 12 },
 });

@@ -1,65 +1,31 @@
-# Austangel Bus Tracker
+# Austangel
 
-Expo Router + Firebase app for managing Austangel school buses. Parents watch buses in real time, drivers log activity, and admin maintain routes and permissions.
+A React Native and Expo Router app for school transportation and travel ride bookings. Firebase provides authentication, Firestore, Realtime Database, and callable Cloud Functions. Stripe is used for travel ride payments.
 
-## Quick Start
+## Current capabilities
 
-1. Install dependencies (first run)
+- Parents manage child profiles and view bus locations for buses their children are assigned to.
+- School drivers start and finish trips, share foreground GPS while a trip is active, and record student boarding and drop-off check-ins.
+- Attendants view the assigned bus roster and record check-ins during an active trip.
+- Admins manage school buses, routes, driver/attendant assignments, and student bus assignments.
+- Travel users can request rides, pay using Stripe PaymentSheet, and follow driver location updates.
 
-   ```bash
-   npm install
-   ```
+Live school GPS is sent while Driver Tools is open and a trip is active. Background tracking, push notifications, account self-deletion, and automatic data-retention cleanup are not implemented. Travel fares use server-side pricing and an estimated straight-line distance factor; this is not a routing or dispatch optimization service.
 
-2. Start Metro and launch the iOS simulator
+## Development setup
 
-   ```bash
-   npx expo start
-   ```
+1. Install the supported Node.js version and dependencies: `npm install`.
+2. Create a local `.env` file from `.env.example` and fill in Firebase configuration. Add `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` if you want the Android native map to use your Google Maps key.
+3. Follow [docs/SETUP.md](docs/SETUP.md) for Firebase Emulator Suite and device setup.
+4. Start the app with `npm start`; use `npm run android`, `npm run ios` (macOS), or `npm run web` as needed.
 
-## Firebase Setup & Seeding
+## Documentation
 
-1. Create a Firebase project and update `services/firebase.ts` with your config.
-2. In **Firestore** create collections:
-   - `users/{uid}` with fields `email`, `role` (`parent`, `driver`, `admin`), and optional `assignedBusId`.
-   - `buses/{busId}` with `nickname`, `driverName`, and optional `routeId`.
-   - `routes/{routeId}` storing `stops` as an ordered array of `{ id, name, latitude, longitude, order }`.
-3. In **Realtime Database** (RTDB) enable the default instance. Live bus positions are written to `/liveLocations/{busId}`.
-4. For a demo ride add:
-   - A parent user (`role: "parent"`) and a bus document (`nickname: "Austangel Bus 1"`, `driverName: "Mr. Adewale"`).
-   - Optional: `routes/demo-route-1` using the coordinates in `constants/geo.ts`.
+- [Setup and local emulators](docs/SETUP.md)
+- [Feature behavior and limits](docs/FEATURES.md)
+- [Security configuration and known release work](docs/SECURITY.md)
+- [Travel payment setup](docs/TRAVEL_PAYMENTS.md)
+- [Privacy and data retention](PRIVACY_POLICY.md)
+- [Terms of Service](TERMS_OF_SERVICE.md)
 
-The app fabricates parent profiles the first time they log in. Drivers and admin accounts need the correct `role` field in Firestore.
-
-## Simulating Bus Movement
-
-- **Driver Tools tab** → tap **Start Simulation** to publish a mock GPS point for the assigned bus.
-- **Track tab** → press **Start Simulation** (admin/parent preview) to broadcast a sample location from the selected route.
-- Update the driver name from the Track info card (admin only) or via the Admin tab.
-
-## Child Check-ins (Preview)
-
-Use **Driver Tools → Record Boarding** to write a demo event to the `checkins` collection. The structure matches the long-term boarded/dropped design.
-
-## Tests
-
-Run unit tests for navigation helpers, driver updates, and location subscriptions:
-
-```bash
-npm test
-```
-
-## Project Structure Highlights
-
-- `models/` – typed Firestore/RTDB models.
-- `providers/AuthProvider.tsx` – role-aware auth context and routing guard.
-- `services/` – Firebase helpers (`firestore`, `realtime`).
-- `app/(auth)` – login flow.
-- `app/(tabs)` – signed-in experience (role-aware tabs, Track, Driver tools, Admin console).
-- `constants/geo.ts` – fallback geo data for simulations.
-- `__tests__/` – Jest specs for critical flows.
-
-## TODO & Security Placeholders
-
-- Implement Firestore/RTDB security rules so drivers write only their bus, parents read with valid permission, and admin manage everything. Add TODO comments when rules are introduced.
-- Flesh out permissions workflow (temporary tracking access) and AI assistant entry point.
-- Expand check-in UI for per-child boarding/dropping flows.
+The privacy policy and terms are operational drafts, not legal approval. Replace the contact placeholders and obtain review for the regions and age groups where the service will operate before publishing.

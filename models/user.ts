@@ -2,7 +2,7 @@
 export type SchoolRole = 'admin' | 'driver' | 'parent' | 'attendant';
 
 // Vehicle & Travel roles
-export type TravelRole = 'passenger' | 'chauffeur' | 'fleet_operator' | 'travel_organizer' | 'travel_admin';
+export type TravelRole = 'passenger' | 'driver';
 
 // All possible roles
 export type UserRole = SchoolRole | TravelRole;

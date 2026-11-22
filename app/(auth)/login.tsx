@@ -8,13 +8,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
+  TouchableWithoutFeedback,
 } from 'react-native';
 
-import { UserRole } from '@/models/user';
+import { SchoolRole, TravelRole, UserRole } from '@/models/user';
 import { upsertUserProfile } from '@/services/firestore/users';
 import { auth } from '@/services/firebase';
 import { useAuthContext } from '@/providers/AuthProvider';
@@ -114,9 +116,10 @@ export default function AuthLandingScreen() {
         await upsertUserProfile({
           id: credential.user.uid,
           email: credential.user.email ?? email.trim(),
-          role: 'parent',
-          primaryService: 'school',
-          schoolRole: 'parent',
+          role,
+          primaryService: primaryService ?? 'school',
+          schoolRole: primaryService === 'travel' ? undefined : role as SchoolRole,
+          travelRole: primaryService === 'travel' ? role as TravelRole : undefined,
           firstName,
           lastName,
           displayName: displayName || credential.user.email || 'Austangel User',
@@ -139,10 +142,16 @@ export default function AuthLandingScreen() {
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.select({ ios: 'padding', android: undefined })}>
-      <View style={styles.form}>
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.select({ ios: 'padding', android: 'height' })}
+        keyboardVerticalOffset={Platform.select({ ios: 60, android: 0 })}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          bounces={false}>
+          <View style={styles.form}>
         {/* Back Button */}
         <Pressable
           style={styles.backButton}
@@ -175,9 +184,9 @@ export default function AuthLandingScreen() {
           ))}
         </View>
 
-        {mode === 'signin' && (
+        {mode === 'signup' && (
           <>
-            <Text style={styles.sectionLabel}>Select your role</Text>
+            <Text style={styles.sectionLabel}>Choose your role</Text>
             <View style={styles.roleRow}>
               {ROLES.map((option) => (
                 <Pressable
@@ -200,7 +209,7 @@ export default function AuthLandingScreen() {
         {mode === 'signup' && (
           <>
             <Text style={styles.infoText}>
-              New accounts are created with the selected role. Contact support to change your role.
+              Admin access must be granted by an administrator. New accounts cannot grant themselves admin privileges.
             </Text>
             <View>
               <Text style={[styles.inputLabel, { color: mode === 'signup' ? '#1f2937' : '#6b7280' }]}>
@@ -315,17 +324,22 @@ export default function AuthLandingScreen() {
               : 'Create Account'}
           </Text>
         </Pressable>
-      </View>
-    </KeyboardAvoidingView>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </TouchableWithoutFeedback>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#fff',
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
     padding: 24,
-    backgroundColor: '#fff',
   },
   form: {
     gap: 14,

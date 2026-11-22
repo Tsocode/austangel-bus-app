@@ -13,6 +13,7 @@ import {
   TextInput,
   View,
   ViewStyle,
+  KeyboardAvoidingView,
 } from 'react-native';
 
 // ============================================================================
@@ -62,7 +63,7 @@ import { useColorScheme } from '@/hooks/useColorScheme';
 import { Bus } from '@/models/bus';
 import { Route, RouteStop } from '@/models/route';
 import { useAuthContext } from '@/providers/AuthProvider';
-import { listBuses, updateBusDriver } from '@/services/firestore/buses';
+import { getBus, listBuses, listBusesForParent, listBusesForSchoolStaff, updateBusDriver } from '@/services/firestore/buses';
 import { getRoute } from '@/services/firestore/routes';
 import { LiveLocation, subscribeToLiveLocation, updateLiveLocation } from '@/services/realtime/locations';
 
@@ -110,11 +111,13 @@ const buildSegmentDurations = (points: Coordinate[], totalDurationMs: number): n
   );
   const totalDistance = distances.reduce((sum, distance) => sum + distance, 0);
   if (!totalDistance) {
-    const evenDuration = Math.max(300, Math.floor(totalDurationMs / distances.length));
+    // Even distribution if no distance variation
+    const evenDuration = Math.max(250, Math.floor(totalDurationMs / distances.length));
     return distances.map(() => evenDuration);
   }
+  // Calculate segment durations proportional to distance, minimum 250ms for smooth animation
   return distances.map((distance) =>
-    Math.max(300, Math.floor((distance / totalDistance) * totalDurationMs))
+    Math.max(250, Math.floor((distance / totalDistance) * totalDurationMs))
   );
 };
 
@@ -125,6 +128,30 @@ const formatArrival = (etaSeconds: number): string => {
 };
 
 const SIMULATION_SPEED_MULTIPLIER = 2.5;
+
+// Realistic bus speeds (km/h) based on traffic conditions
+const BUS_SPEEDS = {
+  idle: 0,
+  slow: 15,      // Heavy traffic
+  moderate: 25,  // Normal traffic
+  highway: 40,   // Open road
+};
+
+// Calculate realistic speed based on route segment
+const calculateBusSpeed = (currentIndex: number, totalPoints: number): number => {
+  if (currentIndex === 0 || currentIndex === totalPoints - 1) {
+    return BUS_SPEEDS.slow;
+  }
+
+  const progress = currentIndex / totalPoints;
+
+  // Simulate varying traffic: slow at start, faster mid-route, slow at end
+  if (progress < 0.2) return BUS_SPEEDS.slow;
+  if (progress < 0.3) return BUS_SPEEDS.moderate;
+  if (progress < 0.7) return BUS_SPEEDS.highway;
+  if (progress < 0.85) return BUS_SPEEDS.moderate;
+  return BUS_SPEEDS.slow;
+};
 
 const FALLBACK_ROUTE: Route = {
   id: 'demo-route-1',
@@ -158,11 +185,6 @@ const FALLBACK_ROUTES: Record<string, Route> = {
     })),
   },
 };
-
-const FALLBACK_BUSES: Bus[] = [
-  { id: 'demo-bus-1', nickname: 'Austangel Bus 1', driverName: 'Mr. Adewale', routeId: 'demo-route-1' },
-  { id: 'demo-bus-2', nickname: 'Austangel Bus 2', driverName: 'Mrs. Bisi', routeId: 'demo-route-2' },
-];
 
 export default function TrackScreen() {
   const { role, profile } = useAuthContext();
@@ -208,6 +230,8 @@ export default function TrackScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [zoomDelta, setZoomDelta] = useState({ latitudeDelta: 0.03, longitudeDelta: 0.03 });
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [currentSpeed, setCurrentSpeed] = useState<number | null>(null);
   const mapRef = useRef<MapViewInstance | null>(null);
   const simulationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const simulationStep = useRef(0);
@@ -293,28 +317,30 @@ export default function TrackScreen() {
 
   useEffect(() => {
     let isMounted = true;
-    listBuses()
+    const loadBuses = async () => {
+      if (role === 'admin') return listBuses();
+      if (role === 'parent' && profile?.id) return listBusesForParent(profile.id);
+      if ((role === 'driver' || role === 'attendant') && profile?.id) {
+        if (profile.assignedBusId) {
+          try {
+            const assignedBus = await getBus(profile.assignedBusId);
+            if (assignedBus) return [assignedBus];
+          } catch {
+            // Fall back to the current assignment queries if this profile is stale.
+          }
+        }
+        return listBusesForSchoolStaff(profile.id);
+      }
+      return [];
+    };
+
+    loadBuses()
       .then((items) => {
-        if (!items.length) {
-          items = FALLBACK_BUSES;
-        }
-
-        // Role-based filtering: drivers/attendants only see their assigned bus; others see all.
-        const requiresAssignment = role === 'driver' || role === 'attendant';
-        const assignedBusId = profile?.assignedBusId ?? null;
-        let filtered = items;
-        if (requiresAssignment) {
-          filtered = assignedBusId ? items.filter((bus) => bus.id === assignedBusId) : [];
-        }
-        if (!filtered.length && !requiresAssignment) {
-          filtered = items;
-        }
-
         if (!isMounted) {
           return;
         }
-        setBuses(filtered);
-        const firstBus = filtered[0];
+        setBuses(items);
+        const firstBus = items[0];
         setSelectedBusId(firstBus?.id ?? null);
         setDriverDraft(firstBus?.driverName ?? '');
       })
@@ -326,14 +352,14 @@ export default function TrackScreen() {
           (error as { code?: string }).code === 'permission-denied';
 
         const message = isPermissionError
-          ? 'Missing Firestore read permission; using fallback buses.'
+          ? 'Missing Firestore read permission for the assigned bus.'
           : 'Failed to load buses';
         console.warn(message, error);
 
         if (isMounted) {
-          setBuses(FALLBACK_BUSES);
-          setSelectedBusId(FALLBACK_BUSES[0].id);
-          setDriverDraft(FALLBACK_BUSES[0].driverName ?? '');
+          setBuses([]);
+          setSelectedBusId(null);
+          setDriverDraft('');
         }
       })
       .finally(() => {
@@ -345,7 +371,7 @@ export default function TrackScreen() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [role, profile?.id, profile?.assignedBusId]);
 
   useEffect(() => {
     if (!selectedBusId) {
@@ -511,7 +537,10 @@ export default function TrackScreen() {
     if (!coords.length) {
       throw new Error('Route not found');
     }
-    const step = Math.max(1, Math.floor(coords.length / 120));
+    // Keep more points to follow road curves accurately
+    // Target: keep 300-400 points for smooth road-following animation
+    const targetPoints = 350;
+    const step = Math.max(1, Math.floor(coords.length / targetPoints));
     const polyline = coords
       .filter((_, index) => index % step === 0)
       .map(([lon, lat]) => ({ latitude: lat, longitude: lon }));
@@ -692,13 +721,15 @@ export default function TrackScreen() {
       const prevNext = simulationPath[Math.max(0, nextIndex - 1)];
       const durationMs =
         segmentDurationsRef.current[Math.max(0, nextIndex - 1)] ?? 1000;
+      const busSpeed = calculateBusSpeed(nextIndex, simulationPath.length);
       const liveNext = {
         latitude: pointNext.latitude,
         longitude: pointNext.longitude,
         updatedAt: Date.now(),
-        speed: 14,
+        speed: busSpeed,
         heading: calculateHeading(prevNext, pointNext),
       };
+      setCurrentSpeed(busSpeed);
       setLiveLocation(liveNext);
       busCoordinate.current.timing({
         latitude: pointNext.latitude,
@@ -753,19 +784,21 @@ export default function TrackScreen() {
             setCurrentIndex(0);
             visitedStopsRef.current = new Set();
             try {
+              const initialSpeed = calculateBusSpeed(0, simulationPath.length);
               await updateLiveLocation(selectedBusId, {
                 latitude: targetPoint.latitude,
                 longitude: targetPoint.longitude,
                 updatedAt: Date.now(),
-                speed: 16,
+                speed: initialSpeed,
                 heading: 90,
               });
+              setCurrentSpeed(initialSpeed);
               setTrailCoords([{ latitude: targetPoint.latitude, longitude: targetPoint.longitude }]);
               setLiveLocation({
                 latitude: targetPoint.latitude,
                 longitude: targetPoint.longitude,
                 updatedAt: Date.now(),
-                speed: 16,
+                speed: initialSpeed,
                 heading: 90,
               });
               Alert.alert('Trip started', 'Parents will see the bus move shortly.');
@@ -799,13 +832,15 @@ export default function TrackScreen() {
                 const point = points[nextIndex];
                 const durationMs =
                   segmentDurationsRef.current[Math.max(0, nextIndex - 1)] ?? 1000;
+                const busSpeed = calculateBusSpeed(nextIndex, points.length);
                 const nextLocation = {
                   latitude: point.latitude,
                   longitude: point.longitude,
                   updatedAt: Date.now(),
-                  speed: 14,
+                  speed: busSpeed,
                   heading: calculateHeading(previous, point),
                 };
+                setCurrentSpeed(busSpeed);
                 setLiveLocation(nextLocation);
                 busCoordinate.current
                   .timing({
@@ -879,6 +914,26 @@ export default function TrackScreen() {
     }
   };
 
+  const handleRefresh = async () => {
+    if (!selectedBusId) return;
+
+    setIsRefreshing(true);
+    try {
+      // Reload live location
+      const unsubscribe = subscribeToLiveLocation(selectedBusId, (location) => {
+        if (location) {
+          setLiveLocation(location);
+          setCurrentSpeed(location.speed ?? null);
+        }
+        unsubscribe?.();
+      });
+    } catch (error) {
+      console.error('Refresh failed:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.screenBg }]}>
@@ -899,7 +954,7 @@ export default function TrackScreen() {
   }
 
   const requiresAssignment = role === 'driver' || role === 'attendant';
-  if (requiresAssignment && (!profile?.assignedBusId || !buses.length)) {
+  if (requiresAssignment && !buses.length) {
     return (
       <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.screenBg }]}>
         <ScrollView style={[styles.screen, { backgroundColor: palette.screenBg }]} contentContainerStyle={{ paddingBottom: 32 }}>
@@ -975,17 +1030,19 @@ export default function TrackScreen() {
         {endCoord ? (
           <Marker coordinate={endCoord} title="Destination" pinColor="#ef4444" />
         ) : null}
-        <MarkerAnimated
-          coordinate={busCoordinate.current as unknown as LatLngCoord}
-          title="Bus location"
-          description={selectedBus?.nickname}
-          rotation={liveLocation?.heading ?? 0}
-          anchor={{ x: 0.5, y: 0.5 }}
-        >
-          <View style={[styles.busMarker, isStale && styles.busMarkerStale]}>
-            <MaterialIcons name="directions-bus" size={22} color="#fff" />
-          </View>
-        </MarkerAnimated>
+        {liveLocation ? (
+          <MarkerAnimated
+            coordinate={busCoordinate.current as unknown as LatLngCoord}
+            title="Bus location"
+            description={selectedBus?.nickname}
+            rotation={liveLocation.heading ?? 0}
+            anchor={{ x: 0.5, y: 0.5 }}
+          >
+            <View style={[styles.busMarker, isStale && styles.busMarkerStale]}>
+              <MaterialIcons name="directions-bus" size={22} color="#fff" />
+            </View>
+          </MarkerAnimated>
+        ) : null}
       </MapView>
     );
   };
@@ -1007,6 +1064,19 @@ export default function TrackScreen() {
         accessibilityLabel="Zoom out"
         hitSlop={8}>
         <Text style={[styles.controlText, { color: palette.textStrong }]}>-</Text>
+      </Pressable>
+      <Pressable
+        style={[styles.controlButton, { backgroundColor: palette.controlBg, borderColor: palette.controlBorder }]}
+        onPress={handleRefresh}
+        disabled={isRefreshing}
+        accessibilityRole="button"
+        accessibilityLabel="Refresh bus location"
+        hitSlop={8}>
+        <MaterialIcons
+          name="refresh"
+          size={18}
+          color={isRefreshing ? palette.textMuted : palette.textStrong}
+        />
       </Pressable>
       <Pressable
         style={[
@@ -1094,9 +1164,11 @@ export default function TrackScreen() {
         </SafeAreaView>
       </Modal>
       <SettingsButton />
-      <ScrollView
-        style={[styles.screen, { backgroundColor: palette.screenBg }]}
-        contentContainerStyle={{ paddingBottom: 32 }}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+        <ScrollView
+          style={[styles.screen, { backgroundColor: palette.screenBg }]}
+          contentContainerStyle={{ paddingBottom: 32 }}
+          keyboardShouldPersistTaps="handled">
         <View style={[styles.banner, { backgroundColor: palette.bannerBg }]}>
           <Text style={[styles.bannerText, { color: palette.bannerText }]}>
             Your child&apos;s bus is being monitored in real time
@@ -1189,9 +1261,19 @@ export default function TrackScreen() {
         <View style={styles.infoRow}>
           <Text style={styles.infoIcon}>📍</Text>
           <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            {startCoord && endCoord
-              ? 'Custom route active'
-              : 'Default route active'}
+            {currentStop ? `At: ${currentStop.name}` : liveLocation ? 'Live bus GPS' : 'Waiting for bus GPS'}
+          </Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoIcon}>🛣️</Text>
+          <Text style={[styles.infoText, { color: palette.textMuted }]}>
+            Next: {routePoints[Math.min(currentIndex + 1, routePoints.length - 1)]?.name ?? '—'}
+          </Text>
+        </View>
+        <View style={styles.infoRow}>
+          <Text style={styles.infoIcon}>⚡</Text>
+          <Text style={[styles.infoText, { color: palette.textMuted }]}>
+            Speed: {liveLocation?.speed == null ? '—' : `${Math.round(liveLocation.speed)} km/h`}
           </Text>
         </View>
         <View style={styles.infoRow}>
@@ -1229,22 +1311,17 @@ export default function TrackScreen() {
           )}
         </View>
         <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>➡️</Text>
+          <Text style={styles.infoIcon}>📍</Text>
           <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            Next stop: {nextStopInfo?.name ?? '—'}
+            {currentStop ? `At: ${currentStop.name}` : 'En route'}
           </Text>
         </View>
-        {isSimulating ? (
-          <Pressable
-            style={[styles.secondaryButton, { backgroundColor: isDark ? '#1f2937' : '#e2e8f0' }]}
-            onPress={handleNextStop}
-            accessibilityRole="button"
-            accessibilityLabel="Jump to next stop">
-            <Text style={[styles.secondaryButtonText, { color: palette.textStrong }]}>
-              Next stop
-            </Text>
-          </Pressable>
-        ) : null}
+        <View style={styles.infoRow}>
+          <Text style={styles.infoIcon}>🛣️</Text>
+          <Text style={[styles.infoText, { color: palette.textMuted }]}>
+            Next: {routePoints[Math.min(currentIndex + 1, routePoints.length - 1)]?.name ?? '—'}
+          </Text>
+        </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoIcon}>⏱️</Text>
           <Text style={[styles.infoText, { color: palette.textMuted }]}>
@@ -1252,14 +1329,61 @@ export default function TrackScreen() {
             {isStale ? '(stale)' : ''}
           </Text>
         </View>
-        {pauseUntil ? (
-          <View style={styles.infoRow}>
-            <Text style={styles.infoIcon}>🚌</Text>
-            <Text style={[styles.infoText, { color: palette.textMuted }]}>
-              Stopped at {currentStop?.name ?? 'stop'} • {Math.max(0, Math.ceil((pauseUntil - Date.now()) / 1000))}s
+
+        {/* =========================================== */}
+        {/* DEMO CONTROLS - Remove before production   */}
+        {/* =========================================== */}
+        {isSimulating && (
+          <View style={[styles.demoCard, { backgroundColor: isDark ? '#7c3aed25' : '#ede9fe', borderColor: '#a78bfa' }]}>
+            <Text style={[styles.demoTitle, { color: '#6d28d9' }]}>⚙️ Demo Controls</Text>
+            <Text style={[styles.demoSubtitle, { color: '#7c3aed' }]}>Testing & Timing</Text>
+
+            {pauseUntil ? (
+              <View style={styles.demoRow}>
+                <Text style={[styles.demoLabel, { color: '#6d28d9' }]}>⏸️ Bus Stopped:</Text>
+                <Text style={[styles.demoValue, { color: '#7c3aed' }]}>
+                  {currentStop?.name} • {Math.max(0, Math.ceil((pauseUntil - Date.now()) / 1000))}s remaining
+                </Text>
+              </View>
+            ) : null}
+
+            <View style={styles.demoBtnRow}>
+              <Pressable
+                style={[styles.demoBtn, { backgroundColor: '#7c3aed' }]}
+                onPress={handleNextStop}>
+                <MaterialIcons name="skip-next" size={16} color="#fff" />
+                <Text style={styles.demoBtnText}>Skip Stop</Text>
+              </Pressable>
+
+              <Pressable
+                style={[styles.demoBtn, { backgroundColor: '#06b6d4' }]}
+                onPress={() => {
+                  if (simulationTimer.current) clearTimeout(simulationTimer.current);
+                  const nextIndex = Math.min(simulationStep.current + 10, simulationPath.length - 1);
+                  if (nextIndex < simulationPath.length) {
+                    const point = simulationPath[nextIndex];
+                    setCurrentIndex(nextIndex);
+                    busCoordinate.current.timing({
+                      latitude: point.latitude,
+                      longitude: point.longitude,
+                      duration: 500,
+                      useNativeDriver: false,
+                    } as Parameters<typeof busCoordinate.current.timing>[0]).start();
+                  }
+                }}>
+                <MaterialIcons name="fast-forward" size={16} color="#fff" />
+                <Text style={styles.demoBtnText}>Fast Forward</Text>
+              </Pressable>
+            </View>
+
+            <Text style={[styles.demoHint, { color: '#7c3aed' }]}>
+              💡 Tip: These controls are for demo testing only. Remove before app launch.
             </Text>
           </View>
-        ) : null}
+        )}
+        {/* =========================================== */}
+        {/* END DEMO CONTROLS                          */}
+        {/* =========================================== */}
         <View style={styles.routeForm}>
           <Text style={[styles.sectionLabel, { color: palette.textStrong }]}>Plan route</Text>
           <TextInput
@@ -1325,18 +1449,10 @@ export default function TrackScreen() {
           </View>
         ) : null}
 
-        <Pressable
-          style={[
-            styles.primaryButton,
-            { backgroundColor: theme.tint },
-            !selectedBusId ? styles.primaryButtonDisabled : undefined,
-          ]}
-          onPress={handleStartTrip}
-          disabled={!selectedBusId}>
-          <Text style={styles.primaryButtonText}>{isSimulating ? 'End Trip' : 'Start Trip'}</Text>
-        </Pressable>
+        {role === 'driver' ? <Text style={[styles.infoText, { color: palette.textMuted }]}>Use the Driver tab to start a trip; it shares the device’s live GPS instead of simulating a route.</Text> : null}
       </View>
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -1700,5 +1816,62 @@ const styles = StyleSheet.create({
   },
   skeletonBlock: {
     backgroundColor: '#e5e7eb',
+  },
+  demoCard: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 16,
+    marginTop: 12,
+  },
+  demoTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  demoSubtitle: {
+    fontSize: 13,
+    marginBottom: 12,
+    fontWeight: '600',
+  },
+  demoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+  },
+  demoLabel: {
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  demoValue: {
+    fontSize: 13,
+    textAlign: 'right',
+  },
+  demoBtnRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  demoBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+  },
+  demoBtnText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  demoHint: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginTop: 8,
   },
 });

@@ -1,203 +1,487 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Helper functions
-    function isSignedIn() {
-      return request.auth != null;
-    }
+    // Assumed data model:
+    // users/{uid}: id, email, role, primaryService, schoolRole, travelRole,
+    //   displayName, firstName, lastName, phoneNumber, photoURL, assignedBusId,
+    //   childIds, fleetId, travelGroupIds, verificationStatus, licenseNumber,
+    //   createdAt, updatedAt.
+    // buses/{busId}: nickname, plateNumber, driverId, assignedAttendants,
+    //   driverName, routeId, parentIds, updatedAt.
+    // routes/{routeId}: name, stops[{id,name,latitude,longitude,order}], parentIds, timestamps.
+    // checkIns/{id}: tripId, childId, parentId, busId, type, recordedBy,
+    //   timestamp, latitude, longitude, note. parentId is the owner UID for
+    //   users/{parentId}/children/{childId}.
+    // trips/{id}: busId, routeId, driverId, date, shift, status, timestamps.
+    // drivers/{uid}: userId, verificationStatus, isAvailable, stats and profile.
+    // drivers_public/{uid}: approved display and availability fields only.
+    // travelTrips/{id}: passengerId, driverId, pickupLocation, dropoffLocation,
+    //   status, requestedTime, schedule, cost, participant and metadata fields.
+    // liveLocations/{driverUid}: userId, latitude, longitude, timestamp, status.
 
+    function signedIn() { return request.auth != null; }
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+    function hasProfile() {
+      return signedIn() && exists(userPath(request.auth.uid));
+    }
+    function profile() { return get(userPath(request.auth.uid)).data; }
+    function profileHas(field) {
+      return hasProfile() && profile().keys().hasAny([field]);
+    }
+    function profileRoleIs(value) {
+      return profileHas('role') && profile().role is string && profile().role == value;
+    }
+    function profileTravelRoleIs(value) {
+      return profileHas('travelRole') && profile().travelRole is string && profile().travelRole == value;
+    }
+    function profileServiceIs(value) {
+      return profileHas('primaryService') && profile().primaryService is string &&
+        profile().primaryService == value;
+    }
+    function roleIs(value) { return profileRoleIs(value); }
+    // Admin authorization comes from a server-issued Firebase custom claim.
+    // The profile role is display data and is never sufficient by itself.
     function isAdmin() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+      return signedIn() && request.auth.token.role == 'admin';
+    }
+    function isSchoolDriver() {
+      return hasProfile() &&
+        ((profileHas('schoolRole') && profile().schoolRole is string && profile().schoolRole == 'driver') ||
+         profileRoleIs('driver')) &&
+        (!profileHas('primaryService') || profile().primaryService != 'travel');
+    }
+    function isSchoolAttendant() { return roleIs('attendant'); }
+    function isSchoolParent() { return roleIs('parent'); }
+    function isTravelPassenger() {
+      // Service switching alone must not turn a driver or school user into a passenger.
+      return hasProfile() &&
+        (profileTravelRoleIs('passenger') ||
+         (profileRoleIs('passenger') && profileServiceIs('travel')));
+    }
+    function isTravelDriver() {
+      return hasProfile() && (profileTravelRoleIs('driver') ||
+        (profileRoleIs('driver') && profileServiceIs('travel')));
+    }
+    function isVerifiedTravelDriver() {
+      return isTravelDriver() && profileHas('verificationStatus') &&
+        profile().verificationStatus == 'verified' &&
+        exists(/databases/$(database)/documents/drivers/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/drivers/$(request.auth.uid)).data.verificationStatus == 'verified';
+    }
+    function isString(value, max) { return value is string && value.size() <= max; }
+    function optionalString(data, field, max) {
+      return !(field in data) || data[field] == null || isString(data[field], max);
+    }
+    function validUser(data, uid) {
+      return data.keys().hasOnly([
+          'id','email','role','primaryService','schoolRole','travelRole','firstName',
+          'lastName','displayName','phoneNumber','photoURL','assignedBusId','childIds',
+          'fleetId','travelGroupIds','verificationStatus','licenseNumber','createdAt','updatedAt'
+        ]) && data.keys().hasAll(['id','email','role','primaryService','displayName','createdAt']) &&
+        data.id == uid && isString(data.email, 320) && isString(data.displayName, 120) &&
+        data.role in ['parent','driver','attendant','admin','passenger'] &&
+        data.primaryService in ['school','travel'] &&
+        (!('schoolRole' in data) || data.schoolRole == null || data.schoolRole in ['parent','driver','attendant','admin']) &&
+        (!('travelRole' in data) || data.travelRole == null || data.travelRole in ['passenger','driver']) &&
+        optionalString(data,'schoolRole',30) && optionalString(data,'travelRole',30) &&
+        optionalString(data,'firstName',80) && optionalString(data,'lastName',80) &&
+        optionalString(data,'phoneNumber',40) && optionalString(data,'photoURL',2048) &&
+        optionalString(data,'assignedBusId',128) && optionalString(data,'fleetId',128) &&
+        optionalString(data,'licenseNumber',128) && data.childIds is list && data.childIds.size() <= 100 &&
+        data.travelGroupIds is list && data.travelGroupIds.size() <= 100 &&
+        data.createdAt is number && data.createdAt > 0 && data.updatedAt is number;
+    }
+    function validBus(data) {
+      return data.keys().hasOnly(['nickname','plateNumber','driverId','assignedAttendants','driverName','routeId','parentIds','updatedAt']) &&
+        data.keys().hasAll(['nickname']) && isString(data.nickname,100) &&
+        optionalString(data,'plateNumber',32) && optionalString(data,'driverId',128) &&
+        optionalString(data,'driverName',120) && optionalString(data,'routeId',128) &&
+        (!('assignedAttendants' in data) || (data.assignedAttendants is list && data.assignedAttendants.size() <= 100)) &&
+        (!('parentIds' in data) || (data.parentIds is list && data.parentIds.size() <= 200)) &&
+        (!('updatedAt' in data) || data.updatedAt is number);
+    }
+    function validStop(stop) {
+      return stop is map && stop.keys().hasOnly(['id','name','latitude','longitude','order']) &&
+        stop.keys().hasAll(['id','name','latitude','longitude','order']) &&
+        isString(stop.id,128) && isString(stop.name,120) &&
+        stop.latitude is number && stop.latitude >= -90 && stop.latitude <= 90 &&
+        stop.longitude is number && stop.longitude >= -180 && stop.longitude <= 180 &&
+        stop.order is number && stop.order >= 0;
+    }
+    function validRoute(data) {
+      return data.keys().hasOnly(['name','stops','parentIds','createdAt','updatedAt']) &&
+        data.keys().hasAll(['name','stops']) && isString(data.name,120) &&
+        // Route writes are admin-only; cap list size here. Stop shape is also
+        // defined by RouteStop in models/route.ts and is checked in the app.
+        data.stops is list && data.stops.size() <= 200 &&
+        (!('parentIds' in data) || (data.parentIds is list && data.parentIds.size() <= 200)) &&
+        (!('createdAt' in data) || data.createdAt is number) &&
+        (!('updatedAt' in data) || data.updatedAt is number);
+    }
+    function ownsTrip(data) { return signedIn() && data.passengerId == request.auth.uid; }
+    function isUnassignedTrip(data) {
+      // The booking callable writes driverId:null; this matches the driver's
+      // availability query, which filters explicitly on driverId == null.
+      return 'driverId' in data && data.driverId == null;
+    }
+    function isAvailableTripRequest(data) {
+      return data.status == 'requested' && data.paymentStatus == 'paid' && isUnassignedTrip(data);
+    }
+    function validLocation(location) {
+      return location is map && location.keys().hasOnly(['latitude','longitude','address','name']) &&
+        location.keys().hasAll(['latitude','longitude','address']) &&
+        location.latitude is number && location.latitude >= -90 && location.latitude <= 90 &&
+        location.longitude is number && location.longitude >= -180 && location.longitude <= 180 &&
+        isString(location.address,300) && optionalString(location,'name',120);
+    }
+    function validTravelTrip(data) {
+      return data.keys().hasOnly([
+          'tripType','passengerId','driverId','travelGroupId','vehicleId',
+          'pickupLocation','dropoffLocation','requestedTime','scheduledTime','startTime','endTime',
+          'estimatedDuration','status','passengers','specialRequests','estimatedCost','finalCost',
+          'createdAt','updatedAt','cancellationReason','paymentStatus','serviceClass',
+          'estimatedCostCents','estimatedDistanceKm','currency','paymentIntentId','paidAt','refundId'
+        ]) && data.keys().hasAll([
+          'tripType','passengerId','pickupLocation','dropoffLocation','requestedTime',
+          'status','createdAt','updatedAt'
+        ]) && data.tripType in ['airport','chauffeur','tourism','corporate','wedding','other'] &&
+        isString(data.passengerId,128) && validLocation(data.pickupLocation) &&
+        validLocation(data.dropoffLocation) && data.requestedTime is number &&
+        data.status in ['requested','assigned','accepted','in_progress','completed','cancelled'] &&
+        data.createdAt is number && data.updatedAt is number &&
+        (!('driverId' in data) || isString(data.driverId,128)) &&
+        (!('travelGroupId' in data) || isString(data.travelGroupId,128)) &&
+        (!('vehicleId' in data) || isString(data.vehicleId,128)) &&
+        (!('scheduledTime' in data) || data.scheduledTime is number) &&
+        (!('startTime' in data) || data.startTime is number) &&
+        (!('endTime' in data) || data.endTime is number) &&
+        (!('estimatedDuration' in data) || (data.estimatedDuration is number && data.estimatedDuration >= 0)) &&
+        (!('passengers' in data) || (data.passengers is int && data.passengers >= 1 && data.passengers <= 100)) &&
+        optionalString(data,'specialRequests',1000) && optionalString(data,'cancellationReason',500) &&
+        (!('estimatedCost' in data) || (data.estimatedCost is number && data.estimatedCost >= 0)) &&
+        (!('finalCost' in data) || (data.finalCost is number && data.finalCost >= 0)) &&
+        (!('paymentStatus' in data) || data.paymentStatus in ['unpaid','paid','failed','refund_pending','refunded']) &&
+        (!('serviceClass' in data) || data.serviceClass in ['standard','comfort','premium']) &&
+        (!('estimatedCostCents' in data) ||
+          (data.estimatedCostCents is int && data.estimatedCostCents >= 1 && data.estimatedCostCents <= 100000000)) &&
+        (!('estimatedDistanceKm' in data) ||
+          (data.estimatedDistanceKm is number && data.estimatedDistanceKm >= 0 && data.estimatedDistanceKm <= 100000)) &&
+        (!('currency' in data) || (isString(data.currency,3) && data.currency.matches('^[a-z]{3}$'))) &&
+        optionalString(data,'paymentIntentId',255) && optionalString(data,'refundId',128) &&
+        (!('paidAt' in data) || data.paidAt is number);
+    }
+    function isAssignedBusStaff(busId) {
+      return signedIn() && busId is string &&
+        exists(/databases/$(database)/documents/buses/$(busId)) &&
+        ((isSchoolDriver() &&
+          'driverId' in get(/databases/$(database)/documents/buses/$(busId)).data &&
+          get(/databases/$(database)/documents/buses/$(busId)).data.driverId == request.auth.uid) ||
+         (isSchoolAttendant() &&
+          'assignedAttendants' in get(/databases/$(database)/documents/buses/$(busId)).data &&
+          get(/databases/$(database)/documents/buses/$(busId)).data.assignedAttendants is list &&
+          request.auth.uid in get(/databases/$(database)/documents/buses/$(busId)).data.assignedAttendants));
+    }
+    function childBusFieldMatches(child, busId) {
+      return (('defaultBusId' in child) && child.defaultBusId == busId) ||
+        (('assignedBusId' in child) && child.assignedBusId == busId) ||
+        (('busId' in child) && child.busId == busId) ||
+        (('assignedBus' in child) && child.assignedBus == busId);
+    }
+    function staffCanReadChild(child) {
+      return (isSchoolDriver() || isSchoolAttendant()) &&
+        ((('defaultBusId' in child) && isAssignedBusStaff(child.defaultBusId)) ||
+         (('assignedBusId' in child) && isAssignedBusStaff(child.assignedBusId)) ||
+         (('busId' in child) && isAssignedBusStaff(child.busId)) ||
+         (('assignedBus' in child) && isAssignedBusStaff(child.assignedBus)));
+    }
+    function childDocumentPath(parentId, childId) {
+      return /databases/$(database)/documents/users/$(parentId)/children/$(childId);
+    }
+    function checkinChildAndBusMatch(data) {
+      return exists(childDocumentPath(data.parentId, data.childId)) &&
+        'guardianIds' in get(childDocumentPath(data.parentId, data.childId)).data &&
+        get(childDocumentPath(data.parentId, data.childId)).data.guardianIds is list &&
+        data.parentId in get(childDocumentPath(data.parentId, data.childId)).data.guardianIds &&
+        childBusFieldMatches(get(childDocumentPath(data.parentId, data.childId)).data, data.busId);
+    }
+    function checkinTripMatches(data) {
+      let tripPath = /databases/$(database)/documents/trips/$(data.tripId);
+      let busPath = /databases/$(database)/documents/buses/$(data.busId);
+      return exists(tripPath) && exists(busPath) &&
+        'busId' in get(tripPath).data && 'status' in get(tripPath).data &&
+        'driverId' in get(tripPath).data && 'routeId' in get(tripPath).data &&
+        get(tripPath).data.busId == data.busId &&
+        get(tripPath).data.status == 'in_progress' &&
+        'driverId' in get(busPath).data && 'routeId' in get(busPath).data &&
+        get(tripPath).data.driverId == get(busPath).data.driverId &&
+        get(tripPath).data.routeId == get(busPath).data.routeId &&
+        (!isSchoolDriver() || get(tripPath).data.driverId == request.auth.uid);
+    }
+    function validCheckin(data) {
+      return data.keys().hasOnly(['tripId','childId','parentId','busId','type','recordedBy','timestamp','latitude','longitude','note']) &&
+        data.keys().hasAll(['tripId','childId','parentId','busId','type','recordedBy','timestamp','latitude','longitude','note']) &&
+        isString(data.tripId,128) && isString(data.childId,128) && isString(data.parentId,128) && isString(data.busId,128) &&
+        data.type in ['boarded','dropped'] && data.recordedBy == request.auth.uid &&
+        data.timestamp is number && data.timestamp >= request.time.toMillis() - 600000 &&
+        data.timestamp <= request.time.toMillis() + 300000 && optionalString(data,'note',500) &&
+        (data.latitude == null ||
+          (data.latitude is number && data.latitude >= -90 && data.latitude <= 90)) &&
+        (data.longitude == null ||
+          (data.longitude is number && data.longitude >= -180 && data.longitude <= 180)) &&
+        ((data.latitude == null && data.longitude == null) ||
+          (data.latitude is number && data.longitude is number));
     }
 
-    function isDriver() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'driver';
-    }
-
-    function isAttendant() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'attendant';
-    }
-
-    function isParent() {
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'parent';
-    }
-
-    function isOwnUser(userId) {
-      return request.auth.uid == userId;
-    }
-
-    function isAssignedToUser(userId) {
-      let userDoc = get(/databases/$(database)/documents/users/$(userId)).data;
-      return request.auth.uid in userDoc.assignedDrivers || request.auth.uid == userId;
-    }
-
-    // ==========================================
-    // USERS COLLECTION
-    // ==========================================
-    match /users/{userId} {
-      // User can read their own profile
-      allow read: if isOwnUser(userId);
-      
-      // Admin can read all user profiles
-      allow read: if isAdmin();
-      
-      // User can update their own profile (except role field)
-      allow update: if isOwnUser(userId) && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'createdAt']);
-      
-      // Only admin can change user roles
-      allow update: if isAdmin() && request.resource.data.role != resource.data.role;
-      
-      // Only admin can delete users
+    match /users/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      // New accounts may self-register only as non-admin basic roles. Server-side
+      // provisioning is required for admin and assignment/verification fields.
+      allow create: if signedIn() && request.auth.uid == uid && validUser(request.resource.data, uid) &&
+        ((request.resource.data.primaryService == 'school' &&
+          request.resource.data.role in ['parent','driver','attendant'] &&
+          request.resource.data.schoolRole == request.resource.data.role &&
+          request.resource.data.travelRole == null) ||
+         (request.resource.data.primaryService == 'travel' &&
+          request.resource.data.role in ['passenger','driver'] &&
+          request.resource.data.travelRole == request.resource.data.role &&
+          request.resource.data.schoolRole == null)) &&
+        request.resource.data.role != 'admin' &&
+        (!('schoolRole' in request.resource.data) || request.resource.data.schoolRole != 'admin') &&
+        (!('assignedBusId' in request.resource.data) || request.resource.data.assignedBusId == null) &&
+        (!('verificationStatus' in request.resource.data) || request.resource.data.verificationStatus != 'verified');
+      allow update: if signedIn() && request.auth.uid == uid && validUser(request.resource.data, uid) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'primaryService','firstName','lastName','displayName','phoneNumber','photoURL','updatedAt'
+        ]) && request.resource.data.role == resource.data.role &&
+        request.resource.data.schoolRole == resource.data.schoolRole &&
+        request.resource.data.travelRole == resource.data.travelRole;
+      allow update: if isAdmin() && validUser(request.resource.data, uid);
       allow delete: if isAdmin();
-      
-      // New users can create their own profile on first signup
-      allow create: if isOwnUser(userId) && request.resource.data.role in ['admin', 'driver', 'parent', 'attendant'];
-      
-      // Admins can also create users
-      allow create: if isAdmin() && request.resource.data.role != null;
 
-      // ==========================================
-      // BUSES SUBCOLLECTION
-      // ==========================================
-      match /buses/{busId} {
-        // Allow reads if user is admin or assigned to this bus
-        allow read: if isAdmin() || request.auth.uid == resource.data.assignedDriver || request.auth.uid in resource.data.assignedAttendants;
-        
-        // Admin can write to buses
-        allow write: if isAdmin();
-        
-        // Drivers can update their own bus location and status
-        allow update: if isDriver() && request.auth.uid == resource.data.assignedDriver && 
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['assignedDriver', 'createdAt', 'ownedBy']);
-      }
-
-      // ==========================================
-      // CHILDREN SUBCOLLECTION (for parents)
-      // ==========================================
       match /children/{childId} {
-        // Parents can read their own children
-        allow read: if isParent() && isOwnUser(userId);
-        
-        // Parents can update their own children
-        allow write: if isParent() && isOwnUser(userId);
-        
-        // Admins can read/write all children
-        allow read, write: if isAdmin();
-        
-        // Drivers and attendants can read children on their bus
-        allow read: if (isDriver() || isAttendant()) && 
-          resource.data.assignedBus == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedBus;
+        function validChild(data) {
+          return data.keys().hasOnly(['id','firstName','lastName','fullName','guardianIds','defaultBusId','assignedBusId','busId','assignedBus','photoURL','notes','createdAt','updatedAt']) &&
+            data.keys().hasAll(['firstName','lastName','guardianIds']) &&
+            (!('id' in data) || (isString(data.id,128) && data.id == childId)) &&
+            isString(data.firstName,80) && isString(data.lastName,80) &&
+            data.guardianIds is list && data.guardianIds.size() <= 10 &&
+            optionalString(data,'fullName',160) && optionalString(data,'defaultBusId',128) &&
+            optionalString(data,'assignedBusId',128) && optionalString(data,'busId',128) &&
+            optionalString(data,'assignedBus',128) &&
+            optionalString(data,'photoURL',2048) && optionalString(data,'notes',500) &&
+            (!('createdAt' in data) || data.createdAt is number) &&
+            (!('updatedAt' in data) || data.updatedAt is number);
+        }
+        allow read: if signedIn() && (request.auth.uid == uid || isAdmin() ||
+          (resource.data.guardianIds is list && request.auth.uid in resource.data.guardianIds) ||
+          staffCanReadChild(resource.data));
+        allow create: if signedIn() && request.auth.uid == uid && isSchoolParent() &&
+          validChild(request.resource.data) && request.resource.data.guardianIds.size() == 1 &&
+          request.auth.uid in request.resource.data.guardianIds &&
+          (!('defaultBusId' in request.resource.data) || request.resource.data.defaultBusId == null) &&
+          (!('assignedBusId' in request.resource.data) || request.resource.data.assignedBusId == null) &&
+          (!('busId' in request.resource.data) || request.resource.data.busId == null) &&
+          (!('assignedBus' in request.resource.data) || request.resource.data.assignedBus == null);
+        allow update: if signedIn() && request.auth.uid == uid && isSchoolParent() &&
+          validChild(request.resource.data) && request.resource.data.guardianIds == resource.data.guardianIds &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'firstName','lastName','fullName','photoURL','notes','updatedAt'
+          ]);
+        allow update: if isAdmin() && validChild(request.resource.data);
+        allow delete: if (signedIn() && request.auth.uid == uid && isSchoolParent()) || isAdmin();
       }
     }
 
-    // ==========================================
-    // BUSES COLLECTION (Root level)
-    // ==========================================
     match /buses/{busId} {
-      // Admin can read all buses
-      allow read: if isAdmin();
-      
-      // Drivers can read buses they're assigned to
-      allow read: if isDriver() && request.auth.uid == resource.data.assignedDriver;
-      
-      // Attendants can read buses they're assigned to
-      allow read: if isAttendant() && request.auth.uid in resource.data.assignedAttendants;
-      
-      // Parents can read buses their children are assigned to
-      allow read: if isParent();
-      
-      // Only admin can write to buses
-      allow write: if isAdmin();
-      
-      // Drivers can update location and check-in status
-      allow update: if isDriver() && request.auth.uid == resource.data.assignedDriver &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['assignedDriver', 'assignedAttendants', 'createdAt']);
+      // Root bus documents use driverId (the app's Bus model field).
+      allow get: if isAdmin() || isAssignedBusStaff(busId) ||
+        (isSchoolParent() && 'parentIds' in resource.data && resource.data.parentIds is list &&
+          request.auth.uid in resource.data.parentIds);
+      allow list: if isAdmin() || (isSchoolParent() && 'parentIds' in resource.data &&
+        resource.data.parentIds is list && request.auth.uid in resource.data.parentIds) ||
+        (isSchoolDriver() && 'driverId' in resource.data && resource.data.driverId == request.auth.uid) ||
+        (isSchoolAttendant() && 'assignedAttendants' in resource.data &&
+          resource.data.assignedAttendants is list && request.auth.uid in resource.data.assignedAttendants);
+      allow create: if isAdmin() && validBus(request.resource.data);
+      allow update: if isAdmin() && validBus(request.resource.data);
+      allow delete: if isAdmin();
     }
 
-    // ==========================================
-    // ROUTES COLLECTION
-    // ==========================================
+    // Collection-group roster queries are scoped to the child's assigned bus.
+    // The nested match above separately preserves owner and guardian access.
+    match /{path=**}/children/{childId} {
+      allow get, list: if isAdmin() || staffCanReadChild(resource.data);
+    }
+
     match /routes/{routeId} {
-      // Admin can read/write all routes
+      allow get: if isAdmin() ||
+        (isSchoolParent() && 'parentIds' in resource.data && resource.data.parentIds is list && request.auth.uid in resource.data.parentIds) ||
+        (profileHas('assignedBusId') && profile().assignedBusId is string &&
+          exists(/databases/$(database)/documents/buses/$(profile().assignedBusId)) &&
+          get(/databases/$(database)/documents/buses/$(profile().assignedBusId)).data.routeId == routeId);
+      allow list: if isAdmin();
+      allow create: if isAdmin() && validRoute(request.resource.data);
+      allow update: if isAdmin() && validRoute(request.resource.data) &&
+        request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if isAdmin();
+    }
+
+    match /checkIns/{checkinId} {
+      allow create: if (isSchoolDriver() || isSchoolAttendant()) &&
+        validCheckin(request.resource.data) &&
+        isAssignedBusStaff(request.resource.data.busId) &&
+        checkinChildAndBusMatch(request.resource.data) &&
+        checkinTripMatches(request.resource.data);
+      allow get, list: if isAdmin() ||
+        ('busId' in resource.data && isSchoolDriver() && isAssignedBusStaff(resource.data.busId)) ||
+        ('busId' in resource.data && 'tripId' in resource.data && isSchoolAttendant() && isAssignedBusStaff(resource.data.busId) &&
+          exists(/databases/$(database)/documents/trips/$(resource.data.tripId)) &&
+          get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.status == 'in_progress') ||
+        (isSchoolParent() && 'parentId' in resource.data && resource.data.parentId is string && 'childId' in resource.data &&
+          exists(childDocumentPath(resource.data.parentId, resource.data.childId)) &&
+          (resource.data.parentId == request.auth.uid ||
+            ('guardianIds' in get(childDocumentPath(resource.data.parentId, resource.data.childId)).data &&
+             get(childDocumentPath(resource.data.parentId, resource.data.childId)).data.guardianIds is list &&
+             request.auth.uid in get(childDocumentPath(resource.data.parentId, resource.data.childId)).data.guardianIds)));
+      allow update, delete: if isAdmin();
+    }
+
+    match /trips/{tripId} {
+      function validSchoolTrip(data) {
+        return data.keys().hasOnly(['id','busId','routeId','driverId','date','shift','startTime','endTime','status','createdAt','updatedAt']) &&
+          data.keys().hasAll(['busId','routeId','driverId','date','shift','status']) &&
+          (!('id' in data) || (isString(data.id,128) && data.id == tripId)) &&
+          isString(data.busId,128) && isString(data.routeId,128) && isString(data.driverId,128) &&
+          data.date is string && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+          data.shift in ['AM','PM'] &&
+          data.status in ['scheduled','in_progress','completed','cancelled'] &&
+          (!('startTime' in data) || data.startTime is number) &&
+          (!('endTime' in data) || data.endTime is number) &&
+          (!('createdAt' in data) || data.createdAt is number) &&
+          (!('updatedAt' in data) || data.updatedAt is number);
+      }
+      allow get, list: if isAdmin() ||
+        ('busId' in resource.data && isSchoolDriver() && isAssignedBusStaff(resource.data.busId)) ||
+        ('busId' in resource.data && isSchoolAttendant() && isAssignedBusStaff(resource.data.busId) &&
+          resource.data.status == 'in_progress') ||
+         (isSchoolParent() && 'busId' in resource.data &&
+          exists(/databases/$(database)/documents/buses/$(resource.data.busId)) &&
+          'parentIds' in get(/databases/$(database)/documents/buses/$(resource.data.busId)).data &&
+          get(/databases/$(database)/documents/buses/$(resource.data.busId)).data.parentIds is list &&
+          request.auth.uid in get(/databases/$(database)/documents/buses/$(resource.data.busId)).data.parentIds);
+      // Admins schedule/manage trips. An assigned driver may start and finish
+      // only their own bus trip; attendants get read access to active trips.
+      allow create: if isAdmin() && validSchoolTrip(request.resource.data) ||
+        (isSchoolDriver() && validSchoolTrip(request.resource.data) &&
+          request.resource.data.driverId == request.auth.uid &&
+          request.resource.data.status == 'in_progress' &&
+          isAssignedBusStaff(request.resource.data.busId) &&
+          get(/databases/$(database)/documents/buses/$(request.resource.data.busId)).data.routeId == request.resource.data.routeId);
+      allow update: if isAdmin() && validSchoolTrip(request.resource.data) ||
+        (isSchoolDriver() && validSchoolTrip(request.resource.data) &&
+          resource.data.driverId == request.auth.uid &&
+          request.resource.data.driverId == resource.data.driverId &&
+          request.resource.data.busId == resource.data.busId &&
+          request.resource.data.routeId == resource.data.routeId &&
+          request.resource.data.createdAt == resource.data.createdAt &&
+          isAssignedBusStaff(resource.data.busId) &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','startTime','endTime','updatedAt']) &&
+          ((resource.data.status == 'scheduled' && request.resource.data.status == 'in_progress') ||
+           (resource.data.status == 'in_progress' && request.resource.data.status in ['completed','cancelled'])));
+      allow delete: if isAdmin();
+    }
+
+    match /drivers/{driverId} {
+      allow get: if isAdmin() || (signedIn() && request.auth.uid == driverId);
+      // Driver docs can contain phone/license data. Create a public, PII-free
+      // projection before enabling passenger discovery queries.
+      allow list: if isAdmin();
+      allow create: if isTravelDriver() && signedIn() && request.auth.uid == driverId &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.verificationStatus == 'pending' &&
+        request.resource.data.isAvailable == false &&
+        request.resource.data.totalTrips == 0 && request.resource.data.rating == 5 &&
+        request.resource.data.acceptanceRate == 1;
+      allow update: if signedIn() && request.auth.uid == driverId && isTravelDriver() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isAvailable','lastActive','updatedAt']) &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.verificationStatus == resource.data.verificationStatus;
+      allow update, delete: if isAdmin();
+    }
+
+    match /drivers_public/{driverId} {
+      // This is a backend-maintained projection that excludes phone, email,
+      // and license data from passenger driver discovery.
+      allow get, list: if isAdmin() || (isTravelPassenger() &&
+        resource.data.isAvailable == true && resource.data.verificationStatus == 'verified');
+      allow create, update, delete: if false;
+    }
+
+    match /travelTrips/{tripId} {
+      // Travel booking and payment state are created/changed by callable Functions
+      // using the Admin SDK. Client trip creation is deliberately denied.
+      allow create: if false;
+      allow get, list: if isAdmin() || (signedIn() &&
+        (resource.data.passengerId == request.auth.uid || resource.data.driverId == request.auth.uid)) ||
+        (isVerifiedTravelDriver() && isAvailableTripRequest(resource.data));
+      allow update: if validTravelTrip(request.resource.data) &&
+        request.resource.data.passengerId == resource.data.passengerId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        (isVerifiedTravelDriver() && signedIn() &&
+          request.resource.data.driverId == request.auth.uid &&
+          ((isAvailableTripRequest(resource.data) && request.resource.data.status == 'accepted' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['driverId','status','updatedAt'])) ||
+           (resource.data.status == 'accepted' && request.resource.data.status == 'in_progress' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','startTime','updatedAt'])) ||
+           (resource.data.status == 'in_progress' && request.resource.data.status == 'completed' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','endTime','updatedAt']))));
+      allow delete: if isAdmin();
+    }
+
+    match /travelPricing/{pricingId} {
+      // Pricing is private configuration; Functions access it with Admin SDK.
       allow read, write: if isAdmin();
-      
-      // Drivers can read routes for their assigned buses
-      allow read: if isDriver() && 
-        exists(/databases/$(database)/documents/buses/$(resource.data.busId)) &&
-        get(/databases/$(database)/documents/buses/$(resource.data.busId)).data.assignedDriver == request.auth.uid;
-      
-      // Attendants can read routes for their assigned buses
-      allow read: if isAttendant() && 
-        exists(/databases/$(database)/documents/buses/$(resource.data.busId)) &&
-        request.auth.uid in get(/databases/$(database)/documents/buses/$(resource.data.busId)).data.assignedAttendants;
-      
-      // Parents can read routes
-      allow read: if isParent();
     }
 
-    // ==========================================
-    // CHECK-INS COLLECTION
-    // ==========================================
-    match /checkIns/{checkInId} {
-      // Admin can read all check-ins
-      allow read: if isAdmin();
-      
-      // Attendants can record check-ins for their bus
-      allow create: if isAttendant() && resource.data.recordedBy == request.auth.uid;
-      allow write: if isAttendant() && resource.data.recordedBy == request.auth.uid;
-      
-      // Drivers can read check-ins for their bus
-      allow read: if isDriver() && resource.data.busId == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedBus;
-      
-      // Parents can read check-ins for their children
-      allow read: if isParent();
+    match /liveLocations/{driverId} {
+      allow get: if isAdmin() || (signedIn() &&
+        (request.auth.uid == driverId || resource.data.userId == request.auth.uid ||
+         (profileHas('assignedBusId') && resource.data.busId == profile().assignedBusId) ||
+         (('tripId' in resource.data) &&
+          exists(/databases/$(database)/documents/travelTrips/$(resource.data.tripId)) &&
+          (get(/databases/$(database)/documents/travelTrips/$(resource.data.tripId)).data.passengerId == request.auth.uid ||
+           get(/databases/$(database)/documents/travelTrips/$(resource.data.tripId)).data.driverId == request.auth.uid))));
+      allow list: if isAdmin();
+      allow create, update: if isVerifiedTravelDriver() && signedIn() && request.auth.uid == driverId &&
+        request.resource.data.keys().hasOnly([
+          'userId','busId','latitude','longitude','speed','bearing','accuracy','status','timestamp','updatedAt','tripId'
+        ]) && request.resource.data.userId == request.auth.uid &&
+        request.resource.data.latitude is number && request.resource.data.latitude >= -90 && request.resource.data.latitude <= 90 &&
+        request.resource.data.longitude is number && request.resource.data.longitude >= -180 && request.resource.data.longitude <= 180 &&
+        (!('timestamp' in request.resource.data) || request.resource.data.timestamp is number) &&
+        (!('updatedAt' in request.resource.data) || request.resource.data.updatedAt is number);
+      allow delete: if isAdmin();
     }
 
-    // ==========================================
-    // LIVE LOCATIONS COLLECTION (Real-time updates)
-    // ==========================================
-    match /liveLocations/{userId} {
-      // User can write their own location
-      allow write: if isOwnUser(userId);
-      
-      // Admin can read all locations
-      allow read: if isAdmin();
-      
-      // Drivers can read their own location
-      allow read: if isDriver() && isOwnUser(userId);
-      
-      // Attendants on the same bus can read location
-      allow read: if isAttendant() && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.assignedBus == 
-        get(/databases/$(database)/documents/users/$(userId)).data.assignedBus;
-      
-      // Parents can read driver locations for buses their children are on
-      allow read: if isParent();
-    }
-
-    // ==========================================
-    // INCIDENT REPORTS COLLECTION
-    // ==========================================
     match /incidents/{incidentId} {
-      // Admin can read/write all incidents
-      allow read, write: if isAdmin();
-      
-      // Drivers and attendants can create incidents
-      allow create: if (isDriver() || isAttendant()) && resource.data.reportedBy == request.auth.uid;
-      
-      // Drivers and attendants can read incidents they reported
-      allow read: if (isDriver() || isAttendant()) && resource.data.reportedBy == request.auth.uid;
-      
-      // Parents can read incidents related to their children
-      allow read: if isParent();
+      allow read: if isAdmin() || (signedIn() && resource.data.reportedBy == request.auth.uid);
+      allow create: if (isSchoolDriver() || isSchoolAttendant()) &&
+        request.resource.data.reportedBy == request.auth.uid &&
+        request.resource.data.keys().hasOnly(['reportedBy','busId','description','type','createdAt','status']) &&
+        isString(request.resource.data.description,2000) && isString(request.resource.data.busId,128) &&
+        request.resource.data.createdAt is number;
+      allow update, delete: if isAdmin();
     }
 
-    // ==========================================
-    // DEFAULT DENY
-    // ==========================================
-    match /{document=**} {
-      allow read, write: if false;
+    match /adminPromotionRequests/{requestId} {
+      // Requests are not currently written by the client; Cloud Functions use Admin SDK.
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create, update, delete: if false;
     }
+
+    match /{document=**} { allow read, write: if false; }
   }
 }

@@ -1,5 +1,29 @@
 export type TripStatus = 'requested' | 'assigned' | 'accepted' | 'in_progress' | 'completed' | 'cancelled';
 export type TripType = 'airport' | 'chauffeur' | 'tourism' | 'corporate' | 'wedding' | 'other';
+export type TravelServiceClass = 'standard' | 'comfort' | 'premium';
+export type TravelPaymentStatus = 'unpaid' | 'paid' | 'failed' | 'refund_pending' | 'refunded';
+
+export interface TravelLocation {
+  latitude: number;
+  longitude: number;
+  address: string;
+  name?: string;
+}
+
+export interface TravelBookingInput {
+  pickupLocation: TravelLocation;
+  dropoffLocation: TravelLocation;
+  passengers: number;
+  serviceClass: TravelServiceClass;
+  scheduledTime: number;
+}
+
+export interface TravelFareQuote {
+  amountCents: number;
+  currency: string;
+  straightLineKm: number;
+  estimatedRoadKm: number;
+}
 
 export interface TravelTrip {
   id: string;
@@ -7,25 +31,15 @@ export interface TravelTrip {
   
   // Participants
   passengerId: string;
-  chauffeurdId?: string;
+  driverId?: string;
   travelGroupId?: string;    // If part of a group
   
   // Vehicle
   vehicleId?: string;
   
   // Route
-  pickupLocation: {
-    latitude: number;
-    longitude: number;
-    address: string;
-    name?: string;
-  };
-  dropoffLocation: {
-    latitude: number;
-    longitude: number;
-    address: string;
-    name?: string;
-  };
+  pickupLocation: TravelLocation;
+  dropoffLocation: TravelLocation;
   
   // Timing
   requestedTime: number;     // When trip was requested
@@ -41,6 +55,15 @@ export interface TravelTrip {
   passengers?: number;       // Number of passengers
   specialRequests?: string;
   estimatedCost?: number;
+  estimatedCostCents?: number;
+  estimatedDistanceKm?: number;
+  currency?: string;
+  serviceClass?: TravelServiceClass;
+  paymentStatus?: TravelPaymentStatus;
+  paymentIntentId?: string;
+  refundId?: string;
+  cancellationReason?: string;
+  paidAt?: number;
   finalCost?: number;
   
   // Metadata

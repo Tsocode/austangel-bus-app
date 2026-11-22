@@ -18,16 +18,17 @@ const TAB_CONFIG = {
   admin: { title: 'Admin', icon: 'person.crop.circle.badge.checkmark' as const },
   home: { title: 'Home', icon: 'house.fill' as const },
   explore: { title: 'Explore', icon: 'paperplane.fill' as const },
+  settings: { title: 'Settings', icon: 'gearshape.fill' as const },
 };
 
 const VISIBLE_TABS: Record<Role, (keyof typeof TAB_CONFIG)[]> = {
-  parent: ['track', 'home', 'explore'],
-  driver: ['track', 'driver-tools', 'home'],
-  attendant: ['track', 'attendant', 'home'],
-  admin: ['track', 'admin', 'home'],
+  parent: ['track', 'home', 'explore', 'settings'],
+  driver: ['track', 'driver-tools', 'home', 'settings'],
+  attendant: ['track', 'attendant', 'home', 'settings'],
+  admin: ['track', 'admin', 'home', 'settings'],
 };
 
-const HIDDEN_TABS: string[] = ['index', 'help', 'settings'];
+const HIDDEN_TABS: string[] = ['index', 'help'];
 
 export default function TabLayout() {
   const colorScheme = useColorScheme();
@@ -71,7 +72,13 @@ export default function TabLayout() {
             options={{
               title: config.title,
               tabBarIcon: config.icon
-                ? ({ color }) => <IconSymbol size={28} name={config.icon!} color={color} />
+                ? ({ color }) => (
+                    <IconSymbol
+                      size={28}
+                      name={config.icon!}
+                      color={typeof color === 'string' ? color : theme.tint}
+                    />
+                  )
                 : undefined,
             }}
           />

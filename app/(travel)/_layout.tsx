@@ -33,6 +33,8 @@ export default function TravelLayout() {
           title: 'Track Your Trip',
         }}
       />
+      <Stack.Screen name="payment" options={{ title: 'Payment' }} />
+      <Stack.Screen name="payment-success" options={{ title: 'Trip booked' }} />
     </Stack>
   );
 }

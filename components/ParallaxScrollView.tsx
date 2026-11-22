@@ -46,7 +46,7 @@ export default function ParallaxScrollView({
   const Animated = require("react-native-reanimated").default;
   const { interpolate, useAnimatedRef, useAnimatedStyle, useScrollViewOffset } = require("react-native-reanimated");
 
-  const scrollRef = useAnimatedRef<any>();
+  const scrollRef = useAnimatedRef();
   const scrollOffset = useScrollViewOffset(scrollRef);
   const headerAnimatedStyle = useAnimatedStyle(() => {
     return {
