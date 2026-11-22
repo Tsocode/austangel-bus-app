@@ -250,7 +250,7 @@ export default function AuthLandingScreen() {
           </Text>
           <View style={styles.passwordWrapper}>
           <TextInput
-            placeholder="Password"
+            placeholder={mode === 'signup' ? 'e.g., SecurePass123' : 'Enter your password'}
             secureTextEntry={!showPassword}
             value={password}
             onChangeText={(value) => {
@@ -264,6 +264,7 @@ export default function AuthLandingScreen() {
             autoCorrect={false}
             textContentType={mode === 'signup' ? 'newPassword' : 'password'}
             autoComplete={mode === 'signup' ? 'new-password' : 'password'}
+            placeholderTextColor="#9ca3af"
           />
           <Pressable
             style={styles.passwordToggle}
