@@ -17,20 +17,27 @@ import {
 import { UserRole } from '@/models/user';
 import { upsertUserProfile } from '@/services/firestore/users';
 import { auth } from '@/services/firebase';
+import { useAuthContext } from '@/providers/AuthProvider';
 
-const ROLES: { label: string; value: UserRole; description: string }[] = [
+const SCHOOL_ROLES: { label: string; value: UserRole; description: string }[] = [
   { label: 'Parent', value: 'parent', description: 'Track your child’s bus' },
   { label: 'Driver', value: 'driver', description: 'Update location & check-ins' },
   { label: 'Attendant', value: 'attendant', description: 'Check kids on/off the bus' },
   { label: 'Admin', value: 'admin', description: 'Manage buses & permissions' },
 ];
 
+const TRAVEL_ROLES: { label: string; value: UserRole; description: string }[] = [
+  { label: 'Passenger', value: 'passenger', description: 'Book and track rides' },
+  { label: 'Driver', value: 'driver', description: 'Offer rides to passengers' },
+];
+
 type AuthMode = 'signin' | 'signup';
 
 export default function AuthLandingScreen() {
   const router = useRouter();
+  const { primaryService } = useAuthContext();
   const [mode, setMode] = useState<AuthMode>('signin');
-  const [role, setRole] = useState<UserRole>('parent');
+  const [role, setRole] = useState<UserRole>(primaryService === 'travel' ? 'passenger' : 'parent');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -38,6 +45,9 @@ export default function AuthLandingScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [hasTypedPassword, setHasTypedPassword] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string; displayName?: string }>({});
+
+  // Get roles based on service type
+  const ROLES = primaryService === 'travel' ? TRAVEL_ROLES : SCHOOL_ROLES;
 
   const splitName = (value: string) => {
     const trimmed = value.trim();
