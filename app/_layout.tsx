@@ -28,6 +28,8 @@ function RootNavigation() {
     }
 
     const inAuthGroup = segments[0] === '(auth)';
+    const inTabsGroup = segments[0] === '(tabs)';
+    const inTravelGroup = segments[0] === '(travel)';
     const currentScreen = segments[1];
 
     // If user hasn't selected a service yet and is not in auth flow, go to service selector
@@ -43,10 +45,10 @@ function RootNavigation() {
         return; // Stay on current auth screen (login)
       }
 
-      // User is authorized, navigate to dashboard
+      // User is authorized, navigate to appropriate dashboard (but only if not already there)
       if (status === 'authorized') {
         if (primaryService === 'school') {
-          router.replace('/(tabs)/track');
+          router.replace('/(tabs)');
         } else {
           router.replace('/(travel)');
         }
@@ -59,10 +61,15 @@ function RootNavigation() {
       return;
     }
 
-    // If user is authorized but not in auth group, go to dashboard
+    // User is authorized and in tabs or travel group, let them navigate freely
+    if (status === 'authorized' && (inTabsGroup || inTravelGroup)) {
+      return;
+    }
+
+    // User is authorized but not in auth/tabs/travel, redirect to appropriate dashboard
     if (status === 'authorized') {
       if (primaryService === 'school') {
-        router.replace('/(tabs)/track');
+        router.replace('/(tabs)');
       } else {
         router.replace('/(travel)');
       }
