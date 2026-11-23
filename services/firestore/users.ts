@@ -17,13 +17,20 @@ export async function getUserProfile(uid: string): Promise<AustangelUser | null>
     id: snapshot.id,
     email: data.email ?? '',
     role: data.role,
+    primaryService: data.primaryService,
+    schoolRole: data.schoolRole,
+    travelRole: data.travelRole,
     firstName: data.firstName,
     lastName: data.lastName,
     displayName: data.displayName,
-    assignedBusId: data.assignedBusId,
-    childIds: data.childIds,
     phoneNumber: data.phoneNumber,
     photoURL: data.photoURL,
+    assignedBusId: data.assignedBusId,
+    childIds: data.childIds,
+    fleetId: data.fleetId,
+    travelGroupIds: data.travelGroupIds,
+    verificationStatus: data.verificationStatus,
+    licenseNumber: data.licenseNumber,
     createdAt: data.createdAt,
     updatedAt: data.updatedAt,
   } as AustangelUser;
@@ -31,23 +38,36 @@ export async function getUserProfile(uid: string): Promise<AustangelUser | null>
 
 export async function upsertUserProfile(user: AustangelUser): Promise<void> {
   const ref = doc(db, USERS_COLLECTION, user.id);
-  await setDoc(
-    ref,
-    {
-      email: user.email,
-      role: user.role,
-      firstName: user.firstName ?? null,
-      lastName: user.lastName ?? null,
-      displayName: user.displayName,
-      assignedBusId: user.assignedBusId ?? null,
-      childIds: user.childIds ?? [],
-      phoneNumber: user.phoneNumber ?? null,
-      photoURL: user.photoURL ?? null,
-      createdAt: user.createdAt ?? Date.now(),
-      updatedAt: Date.now(),
-    },
-    { merge: true }
-  );
+  const userDoc = await getDoc(ref);
+
+  const updateData = {
+    email: user.email,
+    role: user.role,
+    primaryService: user.primaryService ?? 'school',
+    schoolRole: user.schoolRole ?? null,
+    travelRole: user.travelRole ?? null,
+    firstName: user.firstName ?? null,
+    lastName: user.lastName ?? null,
+    displayName: user.displayName,
+    phoneNumber: user.phoneNumber ?? null,
+    photoURL: user.photoURL ?? null,
+    assignedBusId: user.assignedBusId ?? null,
+    childIds: user.childIds ?? [],
+    fleetId: user.fleetId ?? null,
+    travelGroupIds: user.travelGroupIds ?? [],
+    verificationStatus: user.verificationStatus ?? null,
+    licenseNumber: user.licenseNumber ?? null,
+    createdAt: user.createdAt ?? Date.now(),
+    updatedAt: Date.now(),
+  };
+
+  if (userDoc.exists()) {
+    // Document exists - use updateDoc to trigger 'update' rule
+    await updateDoc(ref, updateData);
+  } else {
+    // Document doesn't exist - use setDoc to create it
+    await setDoc(ref, updateData);
+  }
 }
 
 export async function updateUserDisplayName(uid: string, displayName: string): Promise<void> {

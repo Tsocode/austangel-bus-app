@@ -1,11 +1,19 @@
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View, TextInput, Alert, KeyboardAvoidingView, Platform, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { useEffect, useState } from 'react';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { AccordionSection } from '@/components/ui/AccordionSection';
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useThemePreference } from '@/providers/AppearanceProvider';
+import { useAuthContext } from '@/providers/AuthProvider';
+import { promoteToAdminSecure } from '@/services/adminPromotion';
+import { auth, functions } from '@/services/firebase';
+import { httpsCallable } from 'firebase/functions';
 
 const APPEARANCE_OPTIONS = [
   { label: 'System', value: 'system' },
@@ -20,25 +28,151 @@ const UNIT_OPTIONS = [
 
 export default function SettingsScreen() {
   const { preference, setPreference } = useThemePreference();
+  const { profile, primaryService, reloadProfile } = useAuthContext();
   const [unit, setUnit] = useState<'km' | 'mi'>('km');
+  const [adminCode, setAdminCode] = useState('');
+  const [showAdminCode, setShowAdminCode] = useState(false);
+  const [isPromotingToAdmin, setIsPromotingToAdmin] = useState(false);
+  const [isRebuildingAccessMaps, setIsRebuildingAccessMaps] = useState(false);
+  const [notificationPreferences, setNotificationPreferences] = useState({
+    tripUpdates: true,
+    delayAlerts: true,
+    weeklySummary: false,
+  });
+  const [loadedNotificationPreferencesFor, setLoadedNotificationPreferencesFor] = useState<string | null>(null);
+  const { width } = useWindowDimensions();
+  const isWideWeb = Platform.OS === 'web' && width >= Layout.desktopBreakpoint;
+  const isLoadingNotificationPreferences = !profile?.id || loadedNotificationPreferencesFor !== profile.id;
   const colorScheme = useColorScheme() ?? 'light';
   const isDark = colorScheme === 'dark';
   const theme = Colors[colorScheme];
   const palette = {
     screenBg: theme.background,
-    heroBg: isDark ? '#0f172a' : '#EEF2FF',
-    cardBg: isDark ? '#111827' : '#fff',
-    border: isDark ? '#1f2937' : '#E5E7EB',
-    textStrong: isDark ? '#f8fafc' : '#111827',
-    textMuted: isDark ? '#94a3b8' : '#4B5563',
-    textSubtle: isDark ? '#9ca3af' : '#475569',
-    segmentBg: isDark ? '#0b1220' : '#F1F5F9',
-    segmentActive: isDark ? '#1f2937' : '#111827',
+    heroBg: theme.surfaceMuted,
+    cardBg: theme.surface,
+    border: theme.border,
+    textStrong: theme.text,
+    textMuted: theme.icon,
+    textSubtle: theme.icon,
+    segmentBg: theme.surfaceMuted,
+    segmentActive: isDark ? '#2D424B' : '#14232B',
     toggleTrack: isDark ? '#1f2937' : '#e5e7eb',
   };
 
+  useEffect(() => {
+    let active = true;
+    const userId = profile?.id;
+    if (!userId) return;
+    Promise.all([
+      AsyncStorage.getItem(`settings:trip-updates:${userId}`),
+      AsyncStorage.getItem(`settings:delay-alerts:${userId}`),
+      AsyncStorage.getItem(`settings:weekly-summary:${userId}`),
+    ])
+      .then(([tripUpdates, delayAlerts, weeklySummary]) => {
+        if (active) setNotificationPreferences({
+          tripUpdates: tripUpdates == null ? true : tripUpdates === 'true',
+          delayAlerts: delayAlerts == null ? true : delayAlerts === 'true',
+          weeklySummary: weeklySummary === 'true',
+        });
+      })
+      .catch((error) => {
+        console.warn('Could not load notification preferences:', error);
+        if (active) setNotificationPreferences({ tripUpdates: true, delayAlerts: true, weeklySummary: false });
+      })
+      .finally(() => {
+        if (active) setLoadedNotificationPreferencesFor(userId);
+      });
+
+    return () => { active = false; };
+  }, [profile?.id]);
+
+  const handleNotificationPreferenceChange = async (key: keyof typeof notificationPreferences, enabled: boolean) => {
+    const userId = profile?.id;
+    if (!userId) return;
+    const previousPreferences = notificationPreferences;
+    setNotificationPreferences((current) => ({ ...current, [key]: enabled }));
+    const storageKey = key === 'weeklySummary' ? 'weekly-summary' : key === 'tripUpdates' ? 'trip-updates' : 'delay-alerts';
+    try {
+      await AsyncStorage.setItem(`settings:${storageKey}:${userId}`, String(enabled));
+    } catch (error) {
+      console.warn(`Could not save ${storageKey} preference:`, error);
+      setNotificationPreferences(previousPreferences);
+      Alert.alert('Could not save setting', 'Please try again.');
+    }
+  };
+
+  /**
+   * Admin promotion is verified by the callable Cloud Function.
+   */
+  const handlePromoteToAdmin = async () => {
+    if (!adminCode.trim()) {
+      Alert.alert('Empty Code', 'Please enter an admin promotion code.');
+      return;
+    }
+
+    if (!profile) {
+      Alert.alert('Error', 'User profile not found');
+      return;
+    }
+
+    // Prevent double submission
+    if (isPromotingToAdmin) {
+      return;
+    }
+
+    setIsPromotingToAdmin(true);
+
+    try {
+      // The callable verifies the code on the server and sets the custom claim.
+      const result = await promoteToAdminSecure(adminCode);
+
+      if (result.success) {
+        // Backend already updated the user role in Firestore
+        await auth.currentUser?.getIdToken(true).catch((refreshError) => {
+          console.warn('Admin access was granted, but the ID token could not refresh:', refreshError);
+        });
+        // Reload profile to reflect the changes
+        await reloadProfile().catch((refreshError) => {
+          console.warn('Admin access was granted, but the profile could not refresh:', refreshError);
+        });
+        Alert.alert('Admin access granted', 'Your role is active. Reopen the app or sign in again if admin features do not appear yet.');
+        setAdminCode('');
+        setShowAdminCode(false);
+      } else {
+        // Validation failed (invalid code, already admin, etc.)
+        Alert.alert('Promotion Failed', result.error || 'Could not promote to admin.');
+      }
+    } catch (error: any) {
+      console.error('Admin promotion error:', error);
+      Alert.alert('Error', 'An error occurred during admin promotion. Please try again.');
+    } finally {
+      setIsPromotingToAdmin(false);
+    }
+  };
+
+  const handleRebuildAccessMaps = async () => {
+    setIsRebuildingAccessMaps(true);
+    try {
+      const rebuild = httpsCallable(functions, 'rebuildRealtimeAccessMaps');
+      const result = await rebuild();
+      const counts = result.data as { buses?: number; parents?: number; drivers?: number };
+      Alert.alert(
+        'Access maps updated',
+        `Synced ${counts.buses ?? 0} buses, ${counts.parents ?? 0} parents, and ${counts.drivers ?? 0} drivers.`
+      );
+    } catch (error) {
+      Alert.alert(
+        'Sync failed',
+        error instanceof Error ? error.message : 'Could not rebuild access maps.'
+      );
+    } finally {
+      setIsRebuildingAccessMaps(false);
+    }
+  };
+
   return (
-    <ScrollView contentContainerStyle={[styles.container, { backgroundColor: palette.screenBg }]}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+      <ScrollView contentContainerStyle={[styles.container, isWideWeb && styles.webContainer, { backgroundColor: palette.screenBg }]} keyboardShouldPersistTaps="handled">
       <ThemedView style={[styles.hero, { backgroundColor: palette.heroBg }]}>
         <ThemedText type="title">Settings</ThemedText>
         <ThemedText type="default" style={[styles.subtle, { color: palette.textMuted }]}>
@@ -112,43 +246,119 @@ export default function SettingsScreen() {
         </Text>
       </ThemedView>
 
-      <ThemedView style={[styles.card, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-        <ThemedText type="subtitle">Notifications</ThemedText>
+      <AccordionSection title="Notifications" subtitle="Manage your alerts and updates" icon="notifications-none" borderColor={palette.border} backgroundColor={palette.cardBg} textColor={palette.textStrong} mutedColor={palette.textMuted} tintColor={theme.tint}>
         <View style={styles.settingRow}>
           <Text style={[styles.settingLabel, { color: palette.textStrong }]}>Trip updates</Text>
           <Switch
             trackColor={{ false: palette.toggleTrack, true: theme.tint }}
-            value
+            value={notificationPreferences.tripUpdates}
+            onValueChange={(enabled) => handleNotificationPreferenceChange('tripUpdates', enabled)}
+            disabled={isLoadingNotificationPreferences || !profile?.id}
             accessibilityLabel="Toggle trip updates"
+            accessibilityState={{ checked: notificationPreferences.tripUpdates, disabled: isLoadingNotificationPreferences || !profile?.id }}
           />
         </View>
         <View style={styles.settingRow}>
           <Text style={[styles.settingLabel, { color: palette.textStrong }]}>Delay alerts</Text>
           <Switch
             trackColor={{ false: palette.toggleTrack, true: theme.tint }}
-            value
+            value={notificationPreferences.delayAlerts}
+            onValueChange={(enabled) => handleNotificationPreferenceChange('delayAlerts', enabled)}
+            disabled={isLoadingNotificationPreferences || !profile?.id}
             accessibilityLabel="Toggle delay alerts"
+            accessibilityState={{ checked: notificationPreferences.delayAlerts, disabled: isLoadingNotificationPreferences || !profile?.id }}
           />
         </View>
         <View style={styles.settingRow}>
           <Text style={[styles.settingLabel, { color: palette.textStrong }]}>Weekly summary</Text>
           <Switch
             trackColor={{ false: palette.toggleTrack, true: theme.tint }}
+            value={notificationPreferences.weeklySummary}
+            onValueChange={(enabled) => handleNotificationPreferenceChange('weeklySummary', enabled)}
+            disabled={isLoadingNotificationPreferences || !profile?.id}
             accessibilityLabel="Toggle weekly summary"
+            accessibilityState={{ checked: notificationPreferences.weeklySummary, disabled: isLoadingNotificationPreferences || !profile?.id }}
           />
         </View>
-      </ThemedView>
-
-      <ThemedView style={[styles.card, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-        <ThemedText type="subtitle">Account</ThemedText>
-        <Text style={[styles.subtle, { color: palette.textMuted }]}>
-          Profile editing and privacy controls will appear here soon.
+        <Text style={[styles.subtle, { color: palette.textSubtle, fontSize: 12 }]}>
+          Preferences are saved on this device. Push and weekly summary delivery are not active yet.
         </Text>
-      </ThemedView>
+      </AccordionSection>
+
+      <AccordionSection title="Account" subtitle="Profile, permissions & access" icon="manage-accounts" borderColor={palette.border} backgroundColor={palette.cardBg} textColor={palette.textStrong} mutedColor={palette.textMuted} tintColor={theme.tint}>
+        <Text style={[styles.subtle, { color: palette.textMuted }]}>
+          Email: {profile?.email}
+        </Text>
+        <Text style={[styles.subtle, { color: palette.textMuted }]}>
+          Current Role: <Text style={{ fontWeight: '700', color: palette.textStrong }}>{profile?.role}</Text>
+        </Text>
+        {primaryService === 'school' && (
+          <View style={{ marginTop: 12, gap: 10 }}>
+            <Text style={[styles.subtle, { color: palette.textMuted, fontSize: 12 }]}>
+              {profile?.role === 'admin'
+                ? 'Enter the admin code to refresh secure server access.'
+                : 'Have an admin code? Enter it below to request admin access.'}
+            </Text>
+            <View style={[styles.adminCodeInput, { borderColor: palette.border, backgroundColor: isDark ? '#1f2937' : '#f9fafb' }]}>
+              <TextInput
+                placeholder="Enter admin code"
+                secureTextEntry={!showAdminCode}
+                value={adminCode}
+                onChangeText={setAdminCode}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
+                style={[styles.input, { color: palette.textStrong }]}
+                placeholderTextColor={palette.textMuted}
+              />
+              <Pressable
+                onPress={() => setShowAdminCode(!showAdminCode)}
+                style={{ padding: 8 }}>
+                <MaterialIcons
+                  name={showAdminCode ? 'visibility-off' : 'visibility'}
+                  size={18}
+                  color={palette.textMuted}
+                />
+              </Pressable>
+            </View>
+            <Pressable
+              style={[styles.adminButton, { backgroundColor: isPromotingToAdmin ? '#94a3b8' : theme.tint }]}
+              onPress={handlePromoteToAdmin}
+              disabled={isPromotingToAdmin}
+              accessibilityRole="button">
+              {isPromotingToAdmin ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.adminButtonText}>
+                  {profile?.role === 'admin' ? 'Refresh Admin Access' : 'Verify & Promote to Admin'}
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        )}
+        {profile?.role === 'admin' && (
+          <View style={{ marginTop: 8, gap: 10 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <MaterialIcons name="verified" size={16} color="#16a34a" />
+              <Text style={{ color: '#16a34a', fontWeight: '600', fontSize: 13 }}>
+                Admin Access Enabled
+              </Text>
+            </View>
+            <Pressable
+              style={[styles.adminButton, { backgroundColor: theme.tint }]}
+              onPress={handleRebuildAccessMaps}
+              disabled={isRebuildingAccessMaps}
+              accessibilityRole="button">
+              <Text style={styles.adminButtonText}>
+                {isRebuildingAccessMaps ? 'Syncing access maps…' : 'Sync Existing Firebase Access'}
+              </Text>
+            </Pressable>
+          </View>
+        )}
+      </AccordionSection>
 
       {__DEV__ ? (
-        <ThemedView style={[styles.card, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-          <ThemedText type="subtitle">Developer</ThemedText>
+        <AccordionSection title="Developer" subtitle="Diagnostics and development tools" icon="build-circle" borderColor={palette.border} backgroundColor={palette.cardBg} textColor={palette.textStrong} mutedColor={palette.textMuted} tintColor={theme.tint}>
           <Text style={[styles.subtle, { color: palette.textMuted }]}>
             Trigger the global error screen to verify it renders correctly.
           </Text>
@@ -161,20 +371,25 @@ export default function SettingsScreen() {
             accessibilityLabel="Trigger global error screen">
             <Text style={styles.devButtonText}>Test error screen</Text>
           </Pressable>
-        </ThemedView>
+        </AccordionSection>
       ) : null}
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: 920,
     padding: 18,
-    paddingTop: 48,
+    paddingTop: 24,
     gap: 14,
   },
+  webContainer: { paddingTop: 40, paddingHorizontal: 28, paddingBottom: 48 },
   hero: {
-    padding: 18,
+    padding: 20,
     borderRadius: 18,
     backgroundColor: '#EEF2FF',
     gap: 6,
@@ -184,7 +399,7 @@ const styles = StyleSheet.create({
   },
   card: {
     padding: 14,
-    borderRadius: 14,
+    borderRadius: Layout.radius.card,
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#E5E7EB',
@@ -234,5 +449,28 @@ const styles = StyleSheet.create({
   devButtonText: {
     color: '#fff',
     fontWeight: '700',
+  },
+  adminCodeInput: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 44,
+  },
+  input: {
+    flex: 1,
+    fontSize: 14,
+  },
+  adminButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  adminButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 14,
   },
 });

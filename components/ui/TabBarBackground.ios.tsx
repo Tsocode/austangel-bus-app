@@ -15,5 +15,10 @@ export default function BlurTabBarBackground() {
 }
 
 export function useBottomTabOverflow() {
-  return useBottomTabBarHeight();
+  try {
+    return useBottomTabBarHeight();
+  } catch (error) {
+    // If not in a tab navigator context, return 0
+    return 0;
+  }
 }

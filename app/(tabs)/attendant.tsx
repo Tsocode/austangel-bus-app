@@ -1,158 +1,173 @@
-import { useMemo, useState } from 'react';
-import { Alert, Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Button, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SettingsButton } from '@/components/ui/SettingsButton';
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useAuthContext } from '@/providers/AuthProvider';
-import { formatUserName } from '@/utils/user';
-import { SettingsButton } from '@/components/ui/SettingsButton';
-
-type RosterItem = { id: string; name: string; status: 'expected' | 'on' | 'off' };
-
-const DEMO_ROSTER: RosterItem[] = [
-  { id: 'stu-1', name: 'Ada O.', status: 'expected' },
-  { id: 'stu-2', name: 'Tunde A.', status: 'expected' },
-  { id: 'stu-3', name: 'Ife K.', status: 'on' },
-];
+import { Checkin, CheckinType } from '@/models/checkin';
+import { Trip } from '@/models/trip';
+import { getBus, listBusesForSchoolStaff } from '@/services/firestore/buses';
+import {
+  BusRosterStudent,
+  recordSchoolCheckin,
+  subscribeToBusRoster,
+  subscribeToBusTrips,
+  subscribeToTripCheckins,
+} from '@/services/firestore/school';
 
 export default function AttendantScreen() {
-  const { profile } = useAuthContext();
+  const { profile, status } = useAuthContext();
   const colorScheme = useColorScheme() ?? 'light';
-  const isDark = colorScheme === 'dark';
   const theme = Colors[colorScheme];
-  const palette = {
-    screenBg: theme.background,
-    cardBg: isDark ? '#111827' : '#fff',
-    border: isDark ? '#1f2937' : '#e5e7eb',
-    textStrong: isDark ? '#f8fafc' : '#0f172a',
-    textMuted: isDark ? '#94a3b8' : '#475569',
-    textSubtle: isDark ? '#9ca3af' : '#6b7280',
-    inputBg: isDark ? '#0b1220' : '#f8fafc',
-    inputBorder: isDark ? '#1f2937' : '#d0d5dd',
-    rowDivider: isDark ? '#1f2937' : '#f1f5f9',
-  };
-  const [roster, setRoster] = useState<RosterItem[]>(DEMO_ROSTER);
+  const [bus, setBus] = useState<{ id: string; nickname?: string } | null>(null);
+  const [roster, setRoster] = useState<BusRosterStudent[]>([]);
+  const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
+  const [checkins, setCheckins] = useState<Checkin[]>([]);
   const [filter, setFilter] = useState('');
   const [note, setNote] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [savingStudentId, setSavingStudentId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    let stopRoster: (() => void) | undefined;
+    let stopTrips: (() => void) | undefined;
+    setIsLoading(true);
+    const loadAssignedBus = async () => {
+      if (profile?.assignedBusId) return getBus(profile.assignedBusId);
+      if (profile?.id) return (await listBusesForSchoolStaff(profile.id))[0] ?? null;
+      return null;
+    };
+    loadAssignedBus().then((assignedBus) => {
+      if (!alive) return;
+      if (!assignedBus) {
+        setBus(null);
+        setRoster([]);
+        return;
+      }
+      setBus(assignedBus);
+      stopRoster = subscribeToBusRoster(assignedBus.id, setRoster, (error) => setErrorMessage(error.message));
+      stopTrips = subscribeToBusTrips(assignedBus.id, (trips) => {
+        const current = trips.sort((a, b) => (b.startTime ?? 0) - (a.startTime ?? 0))[0] ?? null;
+        setActiveTrip(current);
+      }, (error) => setErrorMessage(error.message));
+    }).catch((error: unknown) => {
+      if (alive) setErrorMessage(error instanceof Error ? error.message : 'Could not load your assigned bus.');
+    }).finally(() => { if (alive) setIsLoading(false); });
+    return () => {
+      alive = false;
+      stopRoster?.();
+      stopTrips?.();
+    };
+  }, [profile?.id, profile?.assignedBusId]);
+
+  useEffect(() => {
+    if (!activeTrip?.id) {
+      setCheckins([]);
+      return;
+    }
+    return subscribeToTripCheckins(activeTrip.id, setCheckins, (error) => setErrorMessage(error.message));
+  }, [activeTrip?.id]);
+
+  const latestStatus = useMemo(() => {
+    const states = new Map<string, Checkin>();
+    for (const checkin of [...checkins].sort((a, b) => a.timestamp - b.timestamp)) states.set(checkin.childId, checkin);
+    return states;
+  }, [checkins]);
 
   const filteredRoster = useMemo(() => {
-    if (!filter.trim()) return roster;
-    return roster.filter((item) =>
-      item.name.toLowerCase().includes(filter.trim().toLowerCase())
-    );
+    const search = filter.trim().toLocaleLowerCase();
+    return search ? roster.filter((student) => student.displayName.toLocaleLowerCase().includes(search)) : roster;
   }, [filter, roster]);
 
-  const updateStatus = (id: string, status: RosterItem['status']) => {
-    setRoster((prev) => prev.map((item) => (item.id === id ? { ...item, status } : item)));
+  const saveCheckin = async (student: BusRosterStudent, type: CheckinType) => {
+    if (!activeTrip || !bus || !profile?.id) {
+      Alert.alert('Trip not active', 'Check-ins can be recorded after the driver starts this bus trip.');
+      return;
+    }
+    try {
+      setSavingStudentId(student.id);
+      await recordSchoolCheckin(activeTrip.id, bus.id, student, type, profile.id, null, note);
+      setNote('');
+    } catch (error) {
+      console.error('Attendant check-in failed:', error);
+      Alert.alert('Check-in not saved', error instanceof Error ? error.message : 'Check your connection and try again.');
+    } finally {
+      setSavingStudentId(null);
+    }
   };
 
+  if (status === 'loading' || isLoading) {
+    return <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}><ActivityIndicator style={{ marginTop: 40 }} color={theme.tint} /></SafeAreaView>;
+  }
+
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.screenBg }]}>
-      <SettingsButton />
-      <ScrollView contentContainerStyle={[styles.container, { backgroundColor: palette.screenBg }]}>
-        <Text style={[styles.heading, { color: palette.textStrong }]}>Attendant Check-ins</Text>
-        <Text style={[styles.subtitle, { color: palette.textMuted }]}>
-          Track expected students and mark on/off bus. Offline queue and sync will be added.
-        </Text>
-        <Text style={[styles.meta, { color: palette.textSubtle }]}>
-          User: {formatUserName(profile, 'Attendant')} • Bus: Assigned bus
-        </Text>
-
-        <View style={[styles.section, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-          <Text style={[styles.sectionTitle, { color: palette.textStrong }]}>Roster</Text>
-          <TextInput
-            placeholder="Search student"
-            value={filter}
-            onChangeText={setFilter}
-            style={[styles.input, { backgroundColor: palette.inputBg, borderColor: palette.inputBorder, color: palette.textStrong }]}
-            placeholderTextColor={palette.textSubtle}
-          />
-          {filteredRoster.map((item) => (
-            <View key={item.id} style={[styles.rosterRow, { borderBottomColor: palette.rowDivider }]}>
-              <View>
-                <Text style={[styles.rosterName, { color: palette.textStrong }]}>{item.name}</Text>
-                <Text style={[styles.rosterId, { color: palette.textSubtle }]}>{item.id}</Text>
-              </View>
-              <View style={styles.rowButtons}>
-                <Button
-                  title="On"
-                  color={item.status === 'on' ? '#22c55e' : undefined}
-                  onPress={() => updateStatus(item.id, 'on')}
-                  accessibilityLabel={`Mark ${item.name} on bus`}
-                />
-                <Button
-                  title="Off"
-                  color={item.status === 'off' ? '#f97316' : undefined}
-                  onPress={() => updateStatus(item.id, 'off')}
-                  accessibilityLabel={`Mark ${item.name} off bus`}
-                />
-              </View>
-            </View>
-          ))}
-        </View>
-
-        <View style={[styles.section, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-          <Text style={[styles.sectionTitle, { color: palette.textStrong }]}>Exceptions & Notes</Text>
-          <Text style={[styles.smallText, { color: palette.textSubtle }]}>
-            Use this for missing riders, custody flags, or extra riders. Sends to admin.
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
+        <SettingsButton />
+        <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+          <Text style={[styles.heading, { color: theme.text }]}>Attendant Check-ins</Text>
+          <Text style={[styles.subtitle, { color: theme.icon }]}>
+            {bus ? `${bus.nickname || `Bus ${bus.id.slice(0, 6)}`} · ${activeTrip ? 'Trip active' : 'Waiting for driver'}` : 'An administrator must assign you to a school bus.'}
           </Text>
-          <TextInput
-            placeholder="Enter a note to admins"
-            value={note}
-            onChangeText={setNote}
-            style={[
-              styles.input,
-              { height: 80, backgroundColor: palette.inputBg, borderColor: palette.inputBorder, color: palette.textStrong },
-            ]}
-            multiline
-            placeholderTextColor={palette.textSubtle}
-          />
-          <Button
-            title="Send note"
-            onPress={() => Alert.alert('Note sent', 'Admins notified.')}
-            color={theme.tint}
-            accessibilityLabel="Send note to admins"
-          />
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          {errorMessage ? <Text accessibilityRole="alert" style={styles.error}>{errorMessage}</Text> : null}
+
+          {bus ? <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>Assigned student roster</Text>
+            <TextInput
+              placeholder="Search student"
+              value={filter}
+              onChangeText={setFilter}
+              style={[styles.input, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+              placeholderTextColor={theme.icon}
+            />
+            <TextInput
+              placeholder="Optional note for the next check-in"
+              value={note}
+              onChangeText={setNote}
+              maxLength={500}
+              style={[styles.input, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+              placeholderTextColor={theme.icon}
+            />
+            {roster.length === 0 ? <Text style={[styles.empty, { color: theme.icon }]}>No students are assigned to this bus. Their parent account needs to set the child&apos;s defaultBusId.</Text> : null}
+            {filteredRoster.map((student) => {
+              const checkin = latestStatus.get(student.id);
+              const statusLabel = !checkin ? 'Expected' : checkin.type === 'boarded' ? 'On bus' : 'Dropped off';
+              return <View key={`${student.parentId}/${student.id}`} style={[styles.row, { borderBottomColor: theme.border }]}>
+                <View style={styles.studentDetails}>
+                  <Text style={[styles.studentName, { color: theme.text }]}>{student.displayName}</Text>
+                  <Text style={[styles.studentStatus, { color: theme.icon }]}>{statusLabel}</Text>
+                </View>
+                <View style={styles.actions}>
+                  <Button title={savingStudentId === student.id ? '…' : 'On'} onPress={() => saveCheckin(student, 'boarded')} disabled={!activeTrip || savingStudentId !== null} color="#16a34a" />
+                  <Button title={savingStudentId === student.id ? '…' : 'Off'} onPress={() => saveCheckin(student, 'dropped')} disabled={!activeTrip || savingStudentId !== null} color="#d97706" />
+                </View>
+              </View>;
+            })}
+          </View> : null}
+        </ScrollView>
+      </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f4f6fb' },
-  container: { flexGrow: 1, padding: 16, gap: 16 },
-  heading: { fontSize: 22, fontWeight: '700', color: '#0f172a' },
-  subtitle: { fontSize: 14, color: '#475569' },
-  meta: { fontSize: 12, color: '#6b7280' },
-  section: {
-    backgroundColor: '#fff',
-    padding: 16,
-    borderRadius: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-  },
-  sectionTitle: { fontSize: 16, fontWeight: '700', color: '#111827' },
-  smallText: { fontSize: 13, color: '#6b7280' },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d0d5dd',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: '#f8fafc',
-  },
-  rosterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  rosterName: { fontSize: 15, fontWeight: '600', color: '#0f172a' },
-  rosterId: { fontSize: 12, color: '#6b7280' },
-  rowButtons: { flexDirection: 'row', gap: 8 },
+  safeArea: { flex: 1 },
+  container: { width: '100%', alignSelf: 'center', maxWidth: 1000, flexGrow: 1, paddingHorizontal: Layout.pageGutter, paddingTop: 88, paddingBottom: 36, gap: 14 },
+  heading: { fontSize: 23, fontWeight: '700' },
+  subtitle: { fontSize: 14, lineHeight: 20 },
+  section: { borderWidth: 1, borderRadius: 16, padding: 15, gap: 12 },
+  sectionTitle: { fontSize: 16, fontWeight: '700' },
+  input: { borderWidth: 1, borderRadius: 10, padding: 11, fontSize: 14 },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: 9, gap: 10 },
+  studentDetails: { flex: 1 },
+  studentName: { fontSize: 14, fontWeight: '600' },
+  studentStatus: { fontSize: 12, marginTop: 3 },
+  actions: { flexDirection: 'row', gap: 5 },
+  empty: { fontSize: 13, lineHeight: 19 },
+  error: { color: '#dc2626', fontSize: 13 },
 });

@@ -3,7 +3,7 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { SymbolWeight } from 'expo-symbols';
-import { OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
+import { type OpaqueColorValue, type StyleProp, type TextStyle } from 'react-native';
 
 type IconSet = 'material' | 'community';
 type IconSymbolName =

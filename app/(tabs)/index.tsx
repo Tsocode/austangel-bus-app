@@ -130,8 +130,15 @@ export default function HomeScreen() {
       <ThemedView style={styles.card}>
         <ThemedText type="subtitle">Support</ThemedText>
         <ThemedText type="default" style={styles.supportText}>
-          Need help? Email support@austangel.com or call +234 (0) 800-123-4567.
+          Need help with an account, route, or bus assignment? Contact your school or app administrator.
         </ThemedText>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open Austangel user guide"
+          onPress={() => router.push('/help')}
+          style={styles.helpButton}>
+          <Text style={styles.helpButtonText}>Open User Guide</Text>
+        </Pressable>
       </ThemedView>
     </ScrollView>
   );
@@ -320,4 +327,6 @@ const styles = StyleSheet.create({
   supportText: {
     color: '#111827',
   },
+  helpButton: { alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', paddingHorizontal: 14, borderRadius: 12, backgroundColor: '#087E83', marginTop: 8 },
+  helpButtonText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

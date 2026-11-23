@@ -4,6 +4,8 @@ export interface Bus {
   plateNumber?: string;
   driverId?: string;
   driverName?: string;
+  assignedAttendants?: string[];
+  parentIds?: string[];
   routeId?: string;
   updatedAt?: number;
 }

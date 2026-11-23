@@ -1,7 +1,11 @@
 import 'dotenv/config';
 
 export default ({ config }) => {
-  const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const legacyMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const androidMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY || legacyMapsKey;
+  const iosMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY || legacyMapsKey;
+  const webMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
+  const useGoogleMaps = process.env.EXPO_PUBLIC_MAPS_PROVIDER === 'google';
 
   return {
     ...config,
@@ -14,30 +18,16 @@ export default ({ config }) => {
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     ios: {
+      bundleIdentifier: 'com.tsocode.austangel',
       supportsTablet: true,
-      ...(googleMapsApiKey
-        ? {
-            config: {
-              googleMapsApiKey,
-            },
-          }
-        : {}),
     },
     android: {
+      package: 'com.tsocode.austangel',
       adaptiveIcon: {
         foregroundImage: './assets/images/adaptive-icon.png',
         backgroundColor: '#ffffff',
       },
       edgeToEdgeEnabled: true,
-      ...(googleMapsApiKey
-        ? {
-            config: {
-              googleMaps: {
-                apiKey: googleMapsApiKey,
-              },
-            },
-          }
-        : {}),
     },
     web: {
       bundler: 'metro',
@@ -46,6 +36,14 @@ export default ({ config }) => {
     },
     plugins: [
       'expo-router',
+      ['@stripe/stripe-react-native', {}],
+      ['@maplibre/maplibre-react-native', {}],
+      ...(useGoogleMaps && (androidMapsKey || iosMapsKey)
+        ? [['react-native-maps', {
+            ...(androidMapsKey ? { androidGoogleMapsApiKey: androidMapsKey } : {}),
+            ...(iosMapsKey ? { iosGoogleMapsApiKey: iosMapsKey } : {}),
+          }]]
+        : []),
       [
         'expo-splash-screen',
         {
@@ -61,13 +59,21 @@ export default ({ config }) => {
     },
     extra: {
       ...config.extra,
+      eas: {
+        projectId: '3778bb84-a6a0-4df5-945e-bbd566ff5134',
+      },
       expoPublicFirebaseApiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
       expoPublicFirebaseAuthDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN,
       expoPublicFirebaseProjectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID,
       expoPublicFirebaseStorageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
       expoPublicFirebaseMessagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
       expoPublicFirebaseAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-      expoPublicGoogleMapsApiKey: googleMapsApiKey,
+      expoPublicGoogleMapsAndroidApiKey: useGoogleMaps ? androidMapsKey : undefined,
+      expoPublicGoogleMapsIosApiKey: useGoogleMaps ? iosMapsKey : undefined,
+      expoPublicGoogleMapsWebApiKey: useGoogleMaps ? webMapsKey : undefined,
+      expoPublicGoogleMapsLegacyApiKey: useGoogleMaps ? legacyMapsKey : undefined,
+      expoPublicGooglePlacesApiKey: useGoogleMaps ? process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY : undefined,
+      expoPublicMapboxToken: useGoogleMaps ? process.env.EXPO_PUBLIC_MAPBOX_TOKEN : undefined,
     },
   };
 };

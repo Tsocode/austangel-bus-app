@@ -1,445 +1,291 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Button, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Button, ScrollView, StyleSheet, Text, TextInput, View, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 
 import { Colors } from '@/constants/Colors';
-import { DEFAULT_LOCATION } from '@/constants/geo';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
-import { Bus } from '@/models/bus';
 import { useAuthContext } from '@/providers/AuthProvider';
 import { SettingsButton } from '@/components/ui/SettingsButton';
-import { getBus } from '@/services/firestore/buses';
-import { recordCheckin } from '@/services/firestore/checkins';
+import { Bus } from '@/models/bus';
+import { Checkin, CheckinType } from '@/models/checkin';
+import { Trip } from '@/models/trip';
+import { getBus, listBusesForSchoolStaff } from '@/services/firestore/buses';
+import {
+  BusRosterStudent,
+  finishSchoolTrip,
+  recordSchoolCheckin,
+  startSchoolTrip,
+  subscribeToBusRoster,
+  subscribeToBusTrips,
+  subscribeToTripCheckins,
+} from '@/services/firestore/school';
 import { updateLiveLocation } from '@/services/realtime/locations';
 
-export default function DriverToolsScreen() {
-  const { profile, status } = useAuthContext();
-  const colorScheme = useColorScheme() ?? 'light';
-  const isDark = colorScheme === 'dark';
-  const theme = Colors[colorScheme];
-  const palette = {
-    screenBg: theme.background,
-    cardBg: isDark ? '#111827' : '#fff',
-    border: isDark ? '#1f2937' : '#e5e7eb',
-    textStrong: isDark ? '#f8fafc' : '#0f172a',
-    textMuted: isDark ? '#94a3b8' : '#475569',
-    textSubtle: isDark ? '#9ca3af' : '#64748b',
-    inputBg: isDark ? '#0b1220' : '#fff',
-    inputBorder: isDark ? '#1f2937' : '#d0d5dd',
-  };
-  const [bus, setBus] = useState<Bus | null>(null);
-  const [isSimulating, setIsSimulating] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [tripId, setTripId] = useState('demo-trip');
-  const [childIdentifier, setChildIdentifier] = useState('');
-  const [childName, setChildName] = useState('');
-  const [checkinNote, setCheckinNote] = useState('');
-  const [lastActionMessage, setLastActionMessage] = useState<string | null>(null);
-  const [currentLocation, setCurrentLocation] = useState(DEFAULT_LOCATION);
-  const [isFetchingLocation, setIsFetchingLocation] = useState(true);
-  const [locationError, setLocationError] = useState<string | null>(null);
-  const broadcastTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+type Coordinate = { latitude: number; longitude: number };
 
-  const driverId = profile?.id ?? 'unknown-driver';
-  const assignedBusId = profile?.assignedBusId ?? null;
-  const isProfileLoading = status === 'loading';
+export default function DriverToolsScreen() {
+  const { profile, role, status } = useAuthContext();
+  const colorScheme = useColorScheme() ?? 'light';
+  const theme = Colors[colorScheme];
+  const [bus, setBus] = useState<Bus | null>(null);
+  const [roster, setRoster] = useState<BusRosterStudent[]>([]);
+  const [activeTrip, setActiveTrip] = useState<Trip | null>(null);
+  const [checkins, setCheckins] = useState<Checkin[]>([]);
+  const [location, setLocation] = useState<Coordinate | null>(null);
+  const [locationStatus, setLocationStatus] = useState('Location is shared while a school trip is active.');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSavingCheckin, setIsSavingCheckin] = useState(false);
+  const [note, setNote] = useState('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const locationSubscription = useRef<Location.LocationSubscription | null>(null);
+
+  const staffId = profile?.id;
+  const assignedBusId = profile?.assignedBusId;
+  const isDriver = role === 'driver';
+  const isAttendant = role === 'attendant';
+  const assignedBus = useMemo(() => bus, [bus]);
+  const isTripActive = activeTrip?.status === 'in_progress';
+  const latestStatusByStudent = useMemo(() => {
+    const latest = new Map<string, Checkin>();
+    for (const checkin of [...checkins].sort((a, b) => a.timestamp - b.timestamp)) latest.set(checkin.childId, checkin);
+    return latest;
+  }, [checkins]);
 
   useEffect(() => {
-    let isMounted = true;
-    if (!assignedBusId) {
-      setBus(null);
+    let alive = true;
+    setIsLoading(true);
+    setErrorMessage(null);
+    const resolveBus = async () => {
+      if (staffId) {
+        if (assignedBusId) {
+          try {
+            const assigned = await getBus(assignedBusId);
+            if (assigned) return assigned;
+          } catch {
+            // Assignment may have changed since this cached profile was loaded.
+          }
+        }
+        const buses = await listBusesForSchoolStaff(staffId);
+        return buses[0] ?? null;
+      }
+      return null;
+    };
+
+    let stopRoster: (() => void) | undefined;
+    let stopTrips: (() => void) | undefined;
+    resolveBus().then((nextBus) => {
+      if (!alive) return;
+      setBus(nextBus);
+      if (!nextBus) {
+        setRoster([]);
+        setActiveTrip(null);
+        return;
+      }
+      stopRoster = subscribeToBusRoster(nextBus.id, setRoster, (error) => {
+        if (alive) setErrorMessage(`Could not load this bus roster: ${error.message}`);
+      });
+      stopTrips = subscribeToBusTrips(nextBus.id, (trips) => {
+        const current = trips.sort((a, b) => (b.startTime ?? 0) - (a.startTime ?? 0))[0] ?? null;
+        setActiveTrip(current);
+      }, (error) => {
+        if (alive) setErrorMessage(`Could not load school trips: ${error.message}`);
+      });
+    }).catch((error: unknown) => {
+      if (alive) setErrorMessage(error instanceof Error ? error.message : 'Could not load the assigned bus.');
+    }).finally(() => { if (alive) setIsLoading(false); });
+
+    return () => {
+      alive = false;
+      stopRoster?.();
+      stopTrips?.();
+    };
+  }, [assignedBusId, staffId]);
+
+  useEffect(() => {
+    if (!activeTrip?.id) {
+      setCheckins([]);
       return;
     }
-    getBus(assignedBusId)
-      .then((nextBus) => {
-        if (isMounted) {
-          setBus(nextBus);
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to load bus', error);
-        if (isMounted) {
-          setBus(null);
-        }
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, [assignedBusId]);
+    return subscribeToTripCheckins(activeTrip.id, setCheckins, (error) => {
+      setErrorMessage(`Could not load trip check-ins: ${error.message}`);
+    });
+  }, [activeTrip?.id]);
 
   useEffect(() => {
-    let isMounted = true;
-    const fetchLocation = async () => {
+    if (!isDriver || !activeTrip || !assignedBus || !staffId) return;
+    let cancelled = false;
+    let subscription: Location.LocationSubscription | null = null;
+
+    const startGpsWatch = async () => {
       try {
-        setIsFetchingLocation(true);
-        const { status: permissionStatus } = await Location.requestForegroundPermissionsAsync();
-        if (permissionStatus !== 'granted') {
-          setLocationError('Location permission denied. Using fallback coordinates.');
+        const permission = await Location.requestForegroundPermissionsAsync();
+        if (!permission.granted) {
+          setLocationStatus('Location permission is required to broadcast the bus GPS.');
           return;
         }
         const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-        if (!isMounted) {
-          return;
-        }
-        setCurrentLocation({
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-        });
-        setLocationError(null);
+        if (cancelled) return;
+        const publish = (coords: Location.LocationObjectCoords) => {
+          const next = { latitude: coords.latitude, longitude: coords.longitude };
+          setLocation(next);
+          setLocationStatus(`GPS active · ${new Date().toLocaleTimeString()}`);
+          void updateLiveLocation(assignedBus.id, {
+            ...next,
+            ...(coords.heading == null || coords.heading < 0 || coords.heading > 360 ? {} : { heading: coords.heading }),
+            ...(coords.speed == null ? {} : { speed: Math.max(0, coords.speed * 3.6) }),
+            updatedAt: Date.now(),
+          }).catch((error) => {
+            console.error('Could not publish live school bus GPS:', error);
+            setLocationStatus('GPS is on, but the bus location could not be sent. Check your connection.');
+          });
+        };
+        publish(position.coords);
+        subscription = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 5000, distanceInterval: 8 },
+          (nextPosition) => publish(nextPosition.coords)
+        );
+        if (cancelled) subscription.remove();
+        else locationSubscription.current = subscription;
       } catch (error) {
-        console.warn('Unable to fetch driver location, falling back to default.', error);
-        if (isMounted) {
-          setLocationError('Unable to read GPS. Using fallback coordinates.');
-        }
-      } finally {
-        if (isMounted) {
-          setIsFetchingLocation(false);
-        }
+        console.error('School bus GPS watch failed:', error);
+        setLocationStatus('Could not start GPS. Check that location services are enabled.');
       }
     };
-    fetchLocation();
+    void startGpsWatch();
     return () => {
-      isMounted = false;
+      cancelled = true;
+      subscription?.remove();
+      if (locationSubscription.current === subscription) locationSubscription.current = null;
     };
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (broadcastTimer.current) {
-        clearInterval(broadcastTimer.current);
-        broadcastTimer.current = null;
-      }
-    };
-  }, []);
-
-  const busTitle = useMemo(() => {
-    if (!bus) {
-      return 'Unassigned bus';
-    }
-    return bus.nickname || `Bus ${bus.id.slice(0, 5).toUpperCase()}`;
-  }, [bus]);
-
-  const stopTrip = (message?: string) => {
-    if (broadcastTimer.current) {
-      clearInterval(broadcastTimer.current);
-      broadcastTimer.current = null;
-    }
-    setIsSimulating(false);
-    if (message) {
-      setLastActionMessage(message);
-    }
-  };
+  }, [isDriver, activeTrip?.id, assignedBus?.id, staffId]);
 
   const handleTripToggle = async () => {
-    if (!assignedBusId) {
-      Alert.alert('No bus assigned', 'Ask an admin to assign a bus to your profile.');
+    if (!staffId || !assignedBus) {
+      Alert.alert('No bus assigned', 'Ask an administrator to assign you to a school bus.');
       return;
     }
-    if (isSimulating) {
-      Haptics.selectionAsync().catch(() => undefined);
-      stopTrip('Trip ended. Live updates stopped.');
+    if (!assignedBus.routeId) {
+      Alert.alert('Route not assigned', 'Ask an administrator to assign a route to this bus before starting a trip.');
       return;
     }
-    if (isFetchingLocation) {
-      Alert.alert('Acquiring GPS', 'Wait for your current location before broadcasting.');
-      return;
-    }
-    try {
-      Haptics.selectionAsync().catch(() => undefined);
-      setIsSimulating(true);
-      await updateLiveLocation(assignedBusId, {
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        updatedAt: Date.now(),
-        speed: 18,
-      });
-      setLastActionMessage('Trip started. Parents can follow the bus in real time.');
-      broadcastTimer.current = setInterval(async () => {
-        try {
-          await updateLiveLocation(assignedBusId, {
-            latitude: currentLocation.latitude,
-            longitude: currentLocation.longitude,
-            updatedAt: Date.now(),
-            speed: 18,
-          });
-        } catch (error) {
-          console.warn('Trip update skipped', error);
-        }
-      }, 15000);
-    } catch (error) {
-      console.error('Trip start failed', error);
-      setLastActionMessage('Trip start failed. Please try again.');
-      setIsSimulating(false);
-    } finally {
-      if (!broadcastTimer.current) {
-        setIsSimulating(false);
+    if (isTripActive && activeTrip) {
+      try {
+        await finishSchoolTrip(activeTrip.id);
+        locationSubscription.current?.remove();
+        locationSubscription.current = null;
+        Haptics.selectionAsync().catch(() => undefined);
+      } catch (error) {
+        Alert.alert('Could not end trip', error instanceof Error ? error.message : 'Please try again.');
       }
-    }
-  };
-
-  const handleRecordCheckin = async (type: 'boarded' | 'dropped') => {
-    if (!assignedBusId) {
-      Alert.alert('No bus assigned', 'Ask an admin to assign a bus to your profile.');
       return;
     }
-
-    if (!tripId.trim()) {
-      Alert.alert('Missing trip', 'Enter the active trip ID before recording.');
-      return;
-    }
-
-    if (!childIdentifier.trim()) {
-      Alert.alert('Missing child ID', 'Enter the student’s ID from the roster.');
-      return;
-    }
-
-    const displayLabel = childName.trim() || childIdentifier.trim();
-    const childId = childIdentifier.trim();
-
     try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Location permission needed', 'Allow location access before starting a school bus trip.');
+        return;
+      }
+      await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      await startSchoolTrip(assignedBus.id, assignedBus.routeId, staffId);
       Haptics.selectionAsync().catch(() => undefined);
-      setIsRecording(true);
-      await recordCheckin(tripId.trim(), childId, type, driverId, {
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        note: checkinNote || undefined,
-      });
-      setLastActionMessage(
-        `${displayLabel} marked as ${type === 'boarded' ? 'boarded' : 'dropped'} at ${new Date().toLocaleTimeString()}`
-      );
-      setChildIdentifier('');
-      setChildName('');
-      setCheckinNote('');
     } catch (error) {
-      console.error('Check-in failed', error);
-      setLastActionMessage('Unable to record check-in. Please try again later.');
-    } finally {
-      setIsRecording(false);
+      console.error('Could not start school trip:', error);
+      Alert.alert('Could not start trip', error instanceof Error ? error.message : 'Check your GPS and try again.');
     }
   };
+
+  const handleCheckin = async (student: BusRosterStudent, type: CheckinType) => {
+    if (!staffId || !assignedBus || !activeTrip) {
+      Alert.alert('No active trip', 'The driver must start this bus trip before recording attendance.');
+      return;
+    }
+    try {
+      setIsSavingCheckin(true);
+      await recordSchoolCheckin(activeTrip.id, assignedBus.id, student, type, staffId, location, note);
+      setNote('');
+      Haptics.selectionAsync().catch(() => undefined);
+    } catch (error) {
+      console.error('Could not record student check-in:', error);
+      Alert.alert('Check-in was not saved', error instanceof Error ? error.message : 'Check your connection and try again.');
+    } finally {
+      setIsSavingCheckin(false);
+    }
+  };
+
+  if (status === 'loading' || isLoading) {
+    return <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}><ActivityIndicator style={{ marginTop: 40 }} color={theme.tint} /></SafeAreaView>;
+  }
 
   return (
-    <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.screenBg }]}>
-      <SettingsButton />
-      <ScrollView contentContainerStyle={[styles.container, { backgroundColor: palette.screenBg }]}>
-        <View style={[styles.card, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-          <Text style={[styles.heading, { color: palette.textStrong }]}>Driver Tools</Text>
-          <Text style={[styles.description, { color: palette.textMuted }]}>
-            Manage your assigned bus and report updates while you are on the road.
-          </Text>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+      <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
+        <SettingsButton />
+        <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+          <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <Text style={[styles.heading, { color: theme.text }]}>{isAttendant ? 'Attendant Check-ins' : 'Driver Tools'}</Text>
+            {!assignedBus ? (
+              <Text style={[styles.description, { color: theme.icon }]}>No school bus is assigned to your profile yet. Ask an administrator to add you to a bus.</Text>
+            ) : <>
+              <View style={styles.section}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Assigned Bus</Text>
+                <Text style={[styles.sectionValue, { color: theme.text }]}>{assignedBus.nickname || `Bus ${assignedBus.id.slice(0, 6)}`}</Text>
+                <Text style={[styles.sectionHint, { color: theme.icon }]}>{assignedBus.plateNumber || 'No plate number'} · {assignedBus.routeId ? `Route ${assignedBus.routeId}` : 'No route assigned'}</Text>
+              </View>
 
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: palette.textStrong }]}>Assigned Bus</Text>
-            <Text style={[styles.sectionValue, { color: palette.textMuted }]}>{busTitle}</Text>
-            <Text style={[styles.sectionHint, { color: palette.textSubtle }]}>
-              Ask an admin to update your bus assignment or driver name.
-            </Text>
+              {isDriver ? <View style={styles.section}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>School trip GPS</Text>
+                <Text style={[styles.sectionHint, { color: theme.icon }]}>{isTripActive ? locationStatus : 'Start the trip to share continuous GPS with parents and the school.'}</Text>
+                <Button title={isTripActive ? 'End Trip' : 'Start Trip'} onPress={handleTripToggle} color={theme.tint} />
+              </View> : null}
+
+              <View style={styles.section}>
+                <Text style={[styles.sectionTitle, { color: theme.text }]}>Student roster</Text>
+                <Text style={[styles.sectionHint, { color: theme.icon }]}>
+                  {activeTrip ? `Active trip · ${activeTrip.shift ?? ''} ${activeTrip.date ?? ''}` : isDriver ? 'Start a trip before marking students.' : 'Waiting for the driver to start the bus trip.'}
+                </Text>
+                {roster.length === 0 ? <Text style={[styles.sectionHint, { color: theme.icon }]}>No students are assigned to this bus. Assign each student a defaultBusId under their parent account.</Text> : null}
+                {roster.map((student) => {
+                  const lastCheckin = latestStatusByStudent.get(student.id);
+                  const statusLabel = !lastCheckin ? 'Expected' : lastCheckin.type === 'boarded' ? 'On bus' : 'Dropped off';
+                  return <View key={`${student.parentId}/${student.id}`} style={[styles.studentRow, { borderBottomColor: theme.border }]}>
+                    <View style={styles.studentDetails}>
+                      <Text style={[styles.studentName, { color: theme.text }]}>{student.displayName}</Text>
+                      <Text style={[styles.sectionHint, { color: theme.icon }]}>{statusLabel}</Text>
+                    </View>
+                    <View style={styles.checkinActions}>
+                      <Button title="On" onPress={() => handleCheckin(student, 'boarded')} disabled={!activeTrip || isSavingCheckin} color="#16a34a" />
+                      <Button title="Off" onPress={() => handleCheckin(student, 'dropped')} disabled={!activeTrip || isSavingCheckin} color="#d97706" />
+                    </View>
+                  </View>;
+                })}
+                <TextInput value={note} onChangeText={setNote} placeholder="Optional note for the next check-in" placeholderTextColor={theme.icon} style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]} maxLength={500} />
+              </View>
+            </>}
+            {errorMessage ? <Text accessibilityRole="alert" style={styles.error}>{errorMessage}</Text> : null}
           </View>
-
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: palette.textStrong }]}>Trip broadcast</Text>
-            <Text style={[styles.sectionHint, { color: palette.textSubtle }]}>
-              Start a trip to publish live updates for your assigned bus.
-            </Text>
-            <Text style={[styles.sectionHint, { color: palette.textSubtle }]}>
-              {isFetchingLocation
-                ? 'Fetching your current GPS fix…'
-                : locationError ?? `Current fix: ${currentLocation.latitude.toFixed(4)}, ${currentLocation.longitude.toFixed(4)}`}
-            </Text>
-            <Button
-              title={isSimulating ? 'End Trip' : 'Start Trip'}
-              onPress={handleTripToggle}
-              disabled={!assignedBusId || isProfileLoading || (isFetchingLocation && !isSimulating)}
-              color={theme.tint}
-              accessibilityLabel={isSimulating ? 'End trip broadcast' : 'Start trip broadcast'}
-            />
-          </View>
-
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: palette.textStrong }]}>Quick Check-in</Text>
-            <Text style={[styles.sectionHint, { color: palette.textSubtle }]}>
-              Capture boarding and drop-off events with timestamps and optional notes.
-            </Text>
-            <TextInput
-              placeholder="Trip ID (e.g., morning-route-1)"
-              value={tripId}
-              onChangeText={setTripId}
-              style={[styles.input, { backgroundColor: palette.inputBg, borderColor: palette.inputBorder, color: palette.textStrong }]}
-              autoCapitalize="none"
-              placeholderTextColor={palette.textSubtle}
-            />
-            <TextInput
-              placeholder="Child ID from roster"
-              value={childIdentifier}
-              onChangeText={setChildIdentifier}
-              style={[styles.input, { backgroundColor: palette.inputBg, borderColor: palette.inputBorder, color: palette.textStrong }]}
-              autoCapitalize="none"
-              placeholderTextColor={palette.textSubtle}
-            />
-            <TextInput
-              placeholder="Child name"
-              value={childName}
-              onChangeText={setChildName}
-              style={[styles.input, { backgroundColor: palette.inputBg, borderColor: palette.inputBorder, color: palette.textStrong }]}
-              placeholderTextColor={palette.textSubtle}
-            />
-            <TextInput
-              placeholder="Note (optional)"
-              value={checkinNote}
-              onChangeText={setCheckinNote}
-              style={[styles.input, { backgroundColor: palette.inputBg, borderColor: palette.inputBorder, color: palette.textStrong }]}
-              placeholderTextColor={palette.textSubtle}
-            />
-            <View style={styles.checkinButtons}>
-              <Button
-                title={isRecording ? 'Saving…' : 'Boarded'}
-                onPress={() => handleRecordCheckin('boarded')}
-                disabled={isRecording || !assignedBusId || isProfileLoading}
-                color="#16a34a"
-                accessibilityLabel="Record boarding"
-              />
-              <Button
-                title={isRecording ? 'Saving…' : 'Dropped'}
-                onPress={() => handleRecordCheckin('dropped')}
-                disabled={isRecording || !assignedBusId || isProfileLoading}
-                color="#dc2626"
-                accessibilityLabel="Record drop-off"
-              />
-            </View>
-          </View>
-
-          {lastActionMessage ? (
-            <Text style={[styles.status, { color: palette.textMuted }]}>{lastActionMessage}</Text>
-          ) : null}
-
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: palette.textStrong }]}>Attendant helper (roster)</Text>
-            <Text style={[styles.sectionHint, { color: palette.textSubtle }]}>
-              Use this when an attendant needs to log check-ins offline and sync later.
-            </Text>
-            <Text style={[styles.sectionHint, { color: palette.textSubtle }]}>
-              Offline queue: 0 pending • Last sync: just now
-            </Text>
-            <View style={styles.row}>
-              <Button
-                title="Open roster"
-                onPress={() => Alert.alert('Roster', 'Coming soon')}
-                color={theme.tint}
-                accessibilityLabel="Open attendant roster"
-              />
-              <Button
-                title="Sync now"
-                onPress={() => Alert.alert('Sync', 'Coming soon')}
-                color={theme.tint}
-                accessibilityLabel="Sync roster now"
-              />
-            </View>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: palette.textStrong }]}>Safety & incidents</Text>
-            <Text style={[styles.sectionHint, { color: palette.textSubtle }]}>
-              Send a quick incident to admins with one tap.
-            </Text>
-            <View style={styles.row}>
-              <Button
-                title="Delay"
-                onPress={() => Alert.alert('Incident', 'Delay reported to admin.')}
-                color={theme.tint}
-                accessibilityLabel="Report delay incident"
-              />
-              <Button
-                title="Vehicle issue"
-                onPress={() => Alert.alert('Incident', 'Vehicle issue reported.')}
-                color={theme.tint}
-                accessibilityLabel="Report vehicle issue"
-              />
-              <Button
-                title="SOS"
-                color="#dc2626"
-                onPress={() => Alert.alert('SOS', 'Admin notified.')}
-                accessibilityLabel="Send SOS alert"
-              />
-            </View>
-          </View>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+        </ScrollView>
+      </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#f4f6fb',
-  },
-  container: {
-    flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingBottom: 32,
-    paddingTop: 24,
-    backgroundColor: '#f4f6fb',
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 24,
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
-    gap: 24,
-  },
-  heading: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#0f172a',
-  },
-  description: {
-    fontSize: 16,
-    color: '#475569',
-  },
-  section: {
-    gap: 12,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1f2937',
-  },
-  sectionValue: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  sectionHint: {
-    fontSize: 14,
-    color: '#64748b',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d0d5dd',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    fontSize: 16,
-    backgroundColor: '#fff',
-  },
-  checkinButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  row: {
-    flexDirection: 'row',
-    gap: 12,
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  status: {
-    fontSize: 14,
-    color: '#0369a1',
-  },
+  safeArea: { flex: 1 },
+  container: { width: '100%', alignSelf: 'center', maxWidth: 1000, flexGrow: 1, paddingHorizontal: Layout.pageGutter, paddingTop: 88, paddingBottom: 36 },
+  card: { borderWidth: 1, borderRadius: 18, padding: 20, gap: 22 },
+  heading: { fontSize: 24, fontWeight: '700' },
+  description: { fontSize: 14, lineHeight: 21 },
+  section: { gap: 10 },
+  sectionTitle: { fontSize: 17, fontWeight: '700' },
+  sectionValue: { fontSize: 16, fontWeight: '600' },
+  sectionHint: { fontSize: 13, lineHeight: 19 },
+  studentRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: 10, gap: 10 },
+  studentDetails: { flex: 1, gap: 2 },
+  studentName: { fontSize: 14, fontWeight: '600' },
+  checkinActions: { flexDirection: 'row', gap: 4 },
+  input: { borderWidth: 1, borderRadius: 10, padding: 11, fontSize: 14 },
+  error: { color: '#dc2626', fontSize: 13 },
 });

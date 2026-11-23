@@ -1,4 +1,5 @@
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import {
@@ -7,28 +8,55 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
+  TouchableWithoutFeedback,
+  useWindowDimensions,
 } from 'react-native';
 
-import { UserRole } from '@/models/user';
+import { SchoolRole, TravelRole, UserRole } from '@/models/user';
 import { upsertUserProfile } from '@/services/firestore/users';
 import { auth } from '@/services/firebase';
+import { useAuthContext } from '@/providers/AuthProvider';
+import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
+import { useColorScheme } from '@/hooks/useColorScheme';
 
-const ROLES: { label: string; value: UserRole; description: string }[] = [
+const SCHOOL_ROLES: { label: string; value: UserRole; description: string }[] = [
   { label: 'Parent', value: 'parent', description: 'Track your child’s bus' },
   { label: 'Driver', value: 'driver', description: 'Update location & check-ins' },
   { label: 'Attendant', value: 'attendant', description: 'Check kids on/off the bus' },
-  { label: 'Admin', value: 'admin', description: 'Manage buses & permissions' },
+];
+
+const TRAVEL_ROLES: { label: string; value: UserRole; description: string }[] = [
+  { label: 'Passenger', value: 'passenger', description: 'Book and track rides' },
+  { label: 'Driver', value: 'driver', description: 'Offer rides to passengers' },
 ];
 
 type AuthMode = 'signin' | 'signup';
+const SUBMIT_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(operation: Promise<T>, message: string, timeoutMs = SUBMIT_TIMEOUT_MS): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    operation.then(resolve, reject).finally(() => clearTimeout(timeout));
+  });
+}
 
 export default function AuthLandingScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ service?: string }>();
+  const { primaryService, switchService } = useAuthContext();
+  const colorScheme = useColorScheme() ?? 'light';
+  const theme = Colors[colorScheme];
+  const { width } = useWindowDimensions();
+  const isWideWeb = Platform.OS === 'web' && width >= Layout.desktopBreakpoint;
+  const selectedService = params.service === 'travel' || params.service === 'school' ? params.service : primaryService ?? 'school';
   const [mode, setMode] = useState<AuthMode>('signin');
-  const [role, setRole] = useState<UserRole>('parent');
+  const [role, setRole] = useState<UserRole>(selectedService === 'travel' ? 'passenger' : 'parent');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
@@ -36,6 +64,9 @@ export default function AuthLandingScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [hasTypedPassword, setHasTypedPassword] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string; displayName?: string }>({});
+
+  // Get roles based on service type
+  const ROLES = selectedService === 'travel' ? TRAVEL_ROLES : SCHOOL_ROLES;
 
   const splitName = (value: string) => {
     const trimmed = value.trim();
@@ -94,52 +125,92 @@ export default function AuthLandingScreen() {
     try {
       Keyboard.dismiss();
       if (mode === 'signin') {
-        await signInWithEmailAndPassword(auth, email.trim(), password);
+        await withTimeout(
+          signInWithEmailAndPassword(auth, email.trim(), password),
+          'Sign-in timed out. Check your connection and make sure Firebase is reachable.'
+        );
+        // Profile loading and service saving happen in AuthProvider; they must
+        // not hold this screen open after Firebase Authentication succeeds.
+        await switchService?.(selectedService);
+        router.replace(selectedService === 'travel' ? '/(travel)' : '/(tabs)');
       } else {
         const { firstName, lastName } = splitName(displayName);
-        const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-        await upsertUserProfile({
+        const credential = await withTimeout(
+          createUserWithEmailAndPassword(auth, email.trim(), password),
+          'Account creation timed out. Check your connection and make sure Firebase is reachable.'
+        );
+        await withTimeout(upsertUserProfile({
           id: credential.user.uid,
           email: credential.user.email ?? email.trim(),
-          role: 'parent',
+          role,
+          primaryService: selectedService,
+          schoolRole: selectedService === 'travel' ? undefined : role as SchoolRole,
+          travelRole: selectedService === 'travel' ? role as TravelRole : undefined,
           firstName,
           lastName,
           displayName: displayName || credential.user.email || 'Austangel User',
           createdAt: Date.now(),
-        });
+        }), 'Profile setup timed out. Your account was created, but setup could not finish.', 15_000);
+        await switchService?.(selectedService);
+        router.replace(selectedService === 'travel' ? '/(travel)' : '/(tabs)');
       }
 
     } catch (error) {
-      console.error('Auth failed:', error);
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'We could not complete the request. Please try again.';
-      Alert.alert(mode === 'signin' ? 'Login Error' : 'Signup Error', message);
+      const authError = error as { code?: string; message?: string };
+      const messages: Record<string, string> = {
+        'auth/user-not-found': 'No account was found for this email. Choose Create Account to register it first.',
+        'auth/invalid-credential': 'We could not sign you in. Check your email and password, or choose Create Account if you are new.',
+        'auth/wrong-password': 'That password is incorrect. Check it and try again.',
+        'auth/email-already-in-use': 'An account already uses this email. Switch to Sign In.',
+        'auth/weak-password': 'Choose a stronger password with at least 8 characters, including uppercase, lowercase, and a number.',
+        'auth/invalid-email': 'Enter a valid email address.',
+        'auth/network-request-failed': 'Could not reach Firebase. Check your connection and try again.',
+      };
+      const message = (authError.code && messages[authError.code]) ||
+        authError.message || 'We could not complete the request. Please try again.';
+      Alert.alert(mode === 'signin' ? 'Sign-in failed' : 'Account creation failed', message);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.select({ ios: 'padding', android: undefined })}>
-      <View style={styles.form}>
-        <Text style={styles.title}>Welcome to Austangel</Text>
-        <Text style={styles.subtitle}>
-          Sign in or create an account to manage buses, track rides, or check in students.
+    <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <KeyboardAvoidingView
+        style={[styles.container, { backgroundColor: theme.background }]}
+        behavior={Platform.select({ ios: 'padding', android: 'height' })}
+        keyboardVerticalOffset={Platform.select({ ios: 60, android: 0 })}>
+        <ScrollView
+          contentContainerStyle={[styles.scrollContent, isWideWeb && styles.webScrollContent]}
+          showsVerticalScrollIndicator={false}
+          bounces={false}>
+          <View style={[styles.form, isWideWeb && styles.webForm, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+        {/* Back Button */}
+        <Pressable
+          style={styles.backButton}
+          onPress={() => router.replace('/(auth)/select-service')}
+          accessibilityRole="button"
+          accessibilityLabel="Go back to service selection">
+          <MaterialIcons name="arrow-back" size={22} color={theme.tint} />
+          <Text style={[styles.backButtonText, { color: theme.tint }]}>Back to Services</Text>
+        </Pressable>
+
+        <Text style={[styles.title, { color: theme.text }]}>Welcome to Austangel</Text>
+        <View style={[styles.servicePill, { backgroundColor: theme.surfaceMuted }]}><Text style={[styles.servicePillText, { color: theme.tint }]}>{selectedService === 'travel' ? 'Travel & Rides' : 'School Transport'}</Text><Pressable onPress={() => router.replace('/(auth)/select-service')}><Text style={[styles.changeService, { color: theme.tint }]}>Change Service</Text></Pressable></View>
+        <Text style={[styles.subtitle, { color: theme.icon }]}>
+          Sign in or create an account to get started.
         </Text>
 
         <View style={styles.modeToggle}>
           {(['signin', 'signup'] as AuthMode[]).map((currentMode) => (
             <Pressable
               key={currentMode}
-              style={[styles.modeButton, mode === currentMode && styles.modeButtonActive]}
+              style={[styles.modeButton, { borderColor: theme.border }, mode === currentMode && [styles.modeButtonActive, { backgroundColor: theme.tint, borderColor: theme.tint }] ]}
               onPress={() => setMode(currentMode)}>
               <Text
                 style={[
                   styles.modeButtonText,
+                  { color: theme.icon },
                   mode === currentMode && styles.modeButtonTextActive,
                 ]}>
                 {currentMode === 'signin' ? 'Sign In' : 'Sign Up'}
@@ -148,19 +219,20 @@ export default function AuthLandingScreen() {
           ))}
         </View>
 
-        {mode === 'signin' && (
+        {mode === 'signup' && (
           <>
-            <Text style={styles.sectionLabel}>Select your role</Text>
+            <Text style={[styles.sectionLabel, { color: theme.text }]}>Choose your role</Text>
             <View style={styles.roleRow}>
               {ROLES.map((option) => (
                 <Pressable
                   key={option.value}
-                  style={[styles.roleChip, role === option.value && styles.roleChipActive]}
+                  style={[styles.roleChip, { borderColor: theme.border }, role === option.value && [styles.roleChipActive, { backgroundColor: theme.surfaceMuted, borderColor: theme.tint }] ]}
                   onPress={() => setRole(option.value)}>
                   <Text
                     style={[
                       styles.roleChipText,
-                      role === option.value && styles.roleChipTextActive,
+                      { color: theme.icon },
+                      role === option.value && [styles.roleChipTextActive, { color: theme.tint }],
                     ]}>
                     {option.label}
                   </Text>
@@ -172,41 +244,58 @@ export default function AuthLandingScreen() {
 
         {mode === 'signup' && (
           <>
-            <Text style={styles.infoText}>
-              New accounts are created as Parents. Contact an administrator to change your role.
+            <Text style={[styles.infoText, { color: theme.tint, backgroundColor: theme.surfaceMuted, borderLeftColor: theme.tint }]}>
+              Admin access must be granted by an administrator. New accounts cannot grant themselves admin privileges.
             </Text>
-            <TextInput
-              placeholder="Full name"
-              value={displayName}
-              onChangeText={setDisplayName}
-              style={styles.input}
-            />
+            <View>
+              <Text style={[styles.inputLabel, { color: theme.text }]}>
+                Full Name
+              </Text>
+              <TextInput
+                placeholder="e.g., John Doe"
+                value={displayName}
+                onChangeText={setDisplayName}
+                style={[styles.input, { backgroundColor: theme.surface, borderColor: theme.border, color: theme.text }]}
+                placeholderTextColor="#9ca3af"
+              />
+            </View>
+            {mode === 'signup' && fieldErrors.displayName ? (
+              <Text style={styles.errorText}>{fieldErrors.displayName}</Text>
+            ) : null}
           </>
         )}
-        {mode === 'signup' && fieldErrors.displayName ? (
-          <Text style={styles.errorText}>{fieldErrors.displayName}</Text>
-        ) : null}
 
-        <TextInput
-          placeholder="Email"
-          autoCapitalize="none"
-          keyboardType="email-address"
-          value={email}
-          onChangeText={(value) => {
-            setEmail(value);
-            if (fieldErrors.email) {
-              setFieldErrors((prev) => ({ ...prev, email: undefined }));
-            }
-          }}
-          style={styles.input}
-          autoCorrect={false}
-          textContentType="username"
-          autoComplete="email"
-        />
-        {fieldErrors.email ? <Text style={styles.errorText}>{fieldErrors.email}</Text> : null}
-        <View style={styles.passwordWrapper}>
+        <View>
+          <Text style={[styles.inputLabel, { color: theme.text }]}>
+            Email Address
+          </Text>
           <TextInput
-            placeholder="Password"
+            placeholder="e.g., you@example.com"
+            autoCapitalize="none"
+            keyboardType="email-address"
+            value={email}
+            onChangeText={(value) => {
+              setEmail(value);
+              if (fieldErrors.email) {
+                setFieldErrors((prev) => ({ ...prev, email: undefined }));
+              }
+            }}
+            style={[styles.input, { backgroundColor: theme.surface, borderColor: theme.border, color: theme.text }]}
+            autoCorrect={false}
+            textContentType="username"
+            autoComplete="email"
+            placeholderTextColor="#9ca3af"
+          />
+        </View>
+        {fieldErrors.email ? <Text style={styles.errorText}>{fieldErrors.email}</Text> : null}
+
+        <View>
+          <Text style={[styles.inputLabel, { color: theme.text }]}>
+            Password
+          </Text>
+          <View style={styles.passwordWrapper}>
+          <TextInput
+            placeholder={mode === 'signup' ? 'e.g., SecurePass123' : 'Enter your password'}
             secureTextEntry={!showPassword}
             value={password}
             onChangeText={(value) => {
@@ -216,10 +305,11 @@ export default function AuthLandingScreen() {
                 setFieldErrors((prev) => ({ ...prev, password: undefined }));
               }
             }}
-            style={[styles.input, styles.passwordInput]}
+            style={[styles.input, styles.passwordInput, { backgroundColor: theme.surface, borderColor: theme.border, color: theme.text }]}
             autoCorrect={false}
             textContentType={mode === 'signup' ? 'newPassword' : 'password'}
             autoComplete={mode === 'signup' ? 'new-password' : 'password'}
+            placeholderTextColor="#9ca3af"
           />
           <Pressable
             style={styles.passwordToggle}
@@ -229,9 +319,10 @@ export default function AuthLandingScreen() {
             <MaterialIcons
               name={showPassword ? 'visibility-off' : 'visibility'}
               size={22}
-              color="#6b7280"
+              color={theme.icon}
             />
           </Pressable>
+          </View>
         </View>
         {fieldErrors.password ? <Text style={styles.errorText}>{fieldErrors.password}</Text> : null}
         {mode === 'signup' && hasTypedPassword ? (
@@ -258,7 +349,7 @@ export default function AuthLandingScreen() {
           </View>
         ) : null}
 
-        <Pressable style={styles.submitButton} onPress={handleSubmit} disabled={isSubmitting}>
+        <Pressable style={[styles.submitButton, { backgroundColor: theme.tint, opacity: isSubmitting ? 0.7 : 1 }]} onPress={handleSubmit} disabled={isSubmitting}>
           <Text style={styles.submitButtonText}>
             {isSubmitting
               ? mode === 'signin'
@@ -269,26 +360,56 @@ export default function AuthLandingScreen() {
               : 'Create Account'}
           </Text>
         </Pressable>
-      </View>
-    </KeyboardAvoidingView>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </TouchableWithoutFeedback>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#F5F8FA',
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: 'center',
-    padding: 24,
-    backgroundColor: '#fff',
+    paddingHorizontal: Layout.pageGutter,
+    paddingVertical: 28,
   },
   form: {
+    width: '100%',
+    maxWidth: 560,
+    alignSelf: 'center',
+    borderRadius: Layout.radius.panel,
+    borderWidth: 1,
+    padding: 22,
     gap: 14,
+  },
+  webScrollContent: { paddingVertical: 44 },
+  webForm: { maxWidth: 600, padding: 32 },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 0,
+    marginBottom: 4,
+  },
+  backButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#2563eb',
   },
   title: {
     fontSize: 28,
     fontWeight: '700',
     marginBottom: 4,
   },
+  servicePill: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#eff6ff', borderRadius: 24, paddingHorizontal: 14, paddingVertical: 8, marginTop: 10, marginBottom: 10 },
+  servicePillText: { color: '#1e3a8a', fontSize: 14, fontWeight: '600' },
+  changeService: { color: '#1d4ed8', fontSize: 14, fontWeight: '700', textDecorationLine: 'underline' },
   subtitle: {
     fontSize: 16,
     color: '#475569',
@@ -302,7 +423,7 @@ const styles = StyleSheet.create({
   modeButton: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#d0d5dd',
+    borderColor: '#DCE6E8',
     borderRadius: 12,
     paddingVertical: 10,
     alignItems: 'center',
@@ -324,6 +445,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#0f172a',
     marginTop: 8,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1f2937',
+    marginBottom: 6,
   },
   roleRow: {
     flexDirection: 'row',
@@ -370,7 +497,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     fontSize: 16,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#fff',
+    color: '#14232B',
   },
   errorText: {
     color: '#dc2626',
@@ -406,8 +534,8 @@ const styles = StyleSheet.create({
     marginTop: -11,
   },
   submitButton: {
-    backgroundColor: '#1d4ed8',
-    borderRadius: 14,
+    borderRadius: Layout.radius.control,
+    minHeight: 52,
     paddingVertical: 14,
     alignItems: 'center',
     marginTop: 4,

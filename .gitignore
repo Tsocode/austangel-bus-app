@@ -25,6 +25,14 @@ expo-env.d.ts
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+firebase-debug.log
+firebase-debug.*.log
+firestore-debug.log
+database-debug.log
+android/app/debug.keystore
+docs/testing/test-accounts.local.csv
+docs/testing/test-accounts.local.md
+scripts/seed-local-test-users.local.cjs
 
 # macOS
 .DS_Store
@@ -37,3 +45,9 @@ yarn-error.*
 *.tsbuildinfo
 
 app-example
+.env
+.env
+
+# Firebase Cloud Functions - Node.js only, do not bundle into mobile app
+functions/lib/
+functions/node_modules/

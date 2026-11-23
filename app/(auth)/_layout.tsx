@@ -5,9 +5,9 @@ export default function AuthLayout() {
     <Stack
       screenOptions={{
         headerShown: false,
-        presentation: 'modal',
       }}>
-      <Stack.Screen name="login" />
+      <Stack.Screen name="login" options={{ presentation: 'card' }} />
+      <Stack.Screen name="select-service" options={{ presentation: 'card' }} />
     </Stack>
   );
 }

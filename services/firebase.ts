@@ -1,9 +1,18 @@
 // services/firebase.ts
 
 import { FirebaseApp, FirebaseOptions, getApp, getApps, initializeApp } from 'firebase/app';
-import { Auth, getAuth, initializeAuth } from 'firebase/auth';
-import { Database, getDatabase } from 'firebase/database';
-import { Firestore, getFirestore } from 'firebase/firestore';
+import {
+  Auth,
+  connectAuthEmulator,
+  getAuth,
+  initializeAuth,
+} from 'firebase/auth';
+import * as FirebaseAuth from 'firebase/auth';
+import ReactNativeAsyncStorage from '@react-native-async-storage/async-storage';
+import { connectDatabaseEmulator, Database, getDatabase } from 'firebase/database';
+import { connectFirestoreEmulator, Firestore, getFirestore } from 'firebase/firestore';
+import { connectFunctionsEmulator, Functions, getFunctions } from 'firebase/functions';
+import { Platform } from 'react-native';
 
 // Prefer env-backed config so keys can vary per environment; fall back to static config so dev still boots.
 const envConfig: FirebaseOptions = {
@@ -43,13 +52,38 @@ if (!hasEnvConfig) {
 }
 
 const app: FirebaseApp = getApps().length ? getApp() : initializeApp(firebaseConfig);
+// The React Native entry point exports this helper, but Firebase's shared
+// TypeScript declarations currently omit it from the `firebase/auth` barrel.
+const getReactNativePersistence = (FirebaseAuth as typeof FirebaseAuth & {
+  getReactNativePersistence: (storage: typeof ReactNativeAsyncStorage) => any;
+}).getReactNativePersistence;
 
 let auth: Auth;
-// `initializeAuth` is optional on web/Expo; `getAuth` will create an instance if none exists.
-// Using this guard avoids calling `initializeAuth` twice during fast refresh.
-auth = getApps().length ? getAuth(app) : initializeAuth(app);
+if (Platform.OS === 'web') {
+  auth = getAuth(app);
+} else {
+  try {
+    auth = initializeAuth(app, {
+      persistence: getReactNativePersistence(ReactNativeAsyncStorage),
+    });
+  } catch (error) {
+    // Fast refresh can re-evaluate this module after Auth was already initialized.
+    if ((error as { code?: string })?.code !== 'auth/already-initialized') throw error;
+    auth = getAuth(app);
+  }
+}
 
 const db: Firestore = getFirestore(app);
 const realtimeDb: Database = getDatabase(app);
+const functions: Functions = getFunctions(app);
 
-export { app, auth, db, realtimeDb };
+if (process.env.EXPO_PUBLIC_USE_FIREBASE_EMULATORS === 'true') {
+  const emulatorHost = process.env.EXPO_PUBLIC_FIREBASE_EMULATOR_HOST ??
+    (Platform.OS === 'android' ? '10.0.2.2' : '127.0.0.1');
+  connectAuthEmulator(auth, `http://${emulatorHost}:9099`, { disableWarnings: true });
+  connectFirestoreEmulator(db, emulatorHost, 8080);
+  connectDatabaseEmulator(realtimeDb, emulatorHost, 9000);
+  connectFunctionsEmulator(functions, emulatorHost, 5001);
+}
+
+export { app, auth, db, realtimeDb, functions };
