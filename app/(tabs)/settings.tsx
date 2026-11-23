@@ -1,10 +1,11 @@
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View, TextInput, Alert, KeyboardAvoidingView, Platform, Keyboard, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View, TextInput, Alert, KeyboardAvoidingView, Platform, ActivityIndicator, useWindowDimensions } from 'react-native';
 import { useEffect, useState } from 'react';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
+import { AccordionSection } from '@/components/ui/AccordionSection';
 import { Colors } from '@/constants/Colors';
 import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
@@ -33,10 +34,15 @@ export default function SettingsScreen() {
   const [showAdminCode, setShowAdminCode] = useState(false);
   const [isPromotingToAdmin, setIsPromotingToAdmin] = useState(false);
   const [isRebuildingAccessMaps, setIsRebuildingAccessMaps] = useState(false);
-  const [weeklySummaryEnabled, setWeeklySummaryEnabled] = useState(false);
-  const [isLoadingWeeklySummary, setIsLoadingWeeklySummary] = useState(true);
+  const [notificationPreferences, setNotificationPreferences] = useState({
+    tripUpdates: true,
+    delayAlerts: true,
+    weeklySummary: false,
+  });
+  const [loadedNotificationPreferencesFor, setLoadedNotificationPreferencesFor] = useState<string | null>(null);
   const { width } = useWindowDimensions();
   const isWideWeb = Platform.OS === 'web' && width >= Layout.desktopBreakpoint;
+  const isLoadingNotificationPreferences = !profile?.id || loadedNotificationPreferencesFor !== profile.id;
   const colorScheme = useColorScheme() ?? 'light';
   const isDark = colorScheme === 'dark';
   const theme = Colors[colorScheme];
@@ -56,37 +62,41 @@ export default function SettingsScreen() {
   useEffect(() => {
     let active = true;
     const userId = profile?.id;
-    if (!userId) {
-      setWeeklySummaryEnabled(false);
-      setIsLoadingWeeklySummary(false);
-      return;
-    }
-
-    setIsLoadingWeeklySummary(true);
-    AsyncStorage.getItem(`settings:weekly-summary:${userId}`)
-      .then((storedValue) => {
-        if (active) setWeeklySummaryEnabled(storedValue === 'true');
+    if (!userId) return;
+    Promise.all([
+      AsyncStorage.getItem(`settings:trip-updates:${userId}`),
+      AsyncStorage.getItem(`settings:delay-alerts:${userId}`),
+      AsyncStorage.getItem(`settings:weekly-summary:${userId}`),
+    ])
+      .then(([tripUpdates, delayAlerts, weeklySummary]) => {
+        if (active) setNotificationPreferences({
+          tripUpdates: tripUpdates == null ? true : tripUpdates === 'true',
+          delayAlerts: delayAlerts == null ? true : delayAlerts === 'true',
+          weeklySummary: weeklySummary === 'true',
+        });
       })
       .catch((error) => {
-        console.warn('Could not load weekly summary preference:', error);
+        console.warn('Could not load notification preferences:', error);
+        if (active) setNotificationPreferences({ tripUpdates: true, delayAlerts: true, weeklySummary: false });
       })
       .finally(() => {
-        if (active) setIsLoadingWeeklySummary(false);
+        if (active) setLoadedNotificationPreferencesFor(userId);
       });
 
     return () => { active = false; };
   }, [profile?.id]);
 
-  const handleWeeklySummaryChange = async (enabled: boolean) => {
+  const handleNotificationPreferenceChange = async (key: keyof typeof notificationPreferences, enabled: boolean) => {
     const userId = profile?.id;
     if (!userId) return;
-    const previousValue = weeklySummaryEnabled;
-    setWeeklySummaryEnabled(enabled);
+    const previousPreferences = notificationPreferences;
+    setNotificationPreferences((current) => ({ ...current, [key]: enabled }));
+    const storageKey = key === 'weeklySummary' ? 'weekly-summary' : key === 'tripUpdates' ? 'trip-updates' : 'delay-alerts';
     try {
-      await AsyncStorage.setItem(`settings:weekly-summary:${userId}`, String(enabled));
+      await AsyncStorage.setItem(`settings:${storageKey}:${userId}`, String(enabled));
     } catch (error) {
-      console.error('Could not save weekly summary preference:', error);
-      setWeeklySummaryEnabled(previousValue);
+      console.warn(`Could not save ${storageKey} preference:`, error);
+      setNotificationPreferences(previousPreferences);
       Alert.alert('Could not save setting', 'Please try again.');
     }
   };
@@ -236,39 +246,46 @@ export default function SettingsScreen() {
         </Text>
       </ThemedView>
 
-      <ThemedView style={[styles.card, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-        <ThemedText type="subtitle">Notifications</ThemedText>
+      <AccordionSection title="Notifications" subtitle="Manage your alerts and updates" icon="notifications-none" borderColor={palette.border} backgroundColor={palette.cardBg} textColor={palette.textStrong} mutedColor={palette.textMuted} tintColor={theme.tint}>
         <View style={styles.settingRow}>
           <Text style={[styles.settingLabel, { color: palette.textStrong }]}>Trip updates</Text>
           <Switch
             trackColor={{ false: palette.toggleTrack, true: theme.tint }}
-            value
+            value={notificationPreferences.tripUpdates}
+            onValueChange={(enabled) => handleNotificationPreferenceChange('tripUpdates', enabled)}
+            disabled={isLoadingNotificationPreferences || !profile?.id}
             accessibilityLabel="Toggle trip updates"
+            accessibilityState={{ checked: notificationPreferences.tripUpdates, disabled: isLoadingNotificationPreferences || !profile?.id }}
           />
         </View>
         <View style={styles.settingRow}>
           <Text style={[styles.settingLabel, { color: palette.textStrong }]}>Delay alerts</Text>
           <Switch
             trackColor={{ false: palette.toggleTrack, true: theme.tint }}
-            value
+            value={notificationPreferences.delayAlerts}
+            onValueChange={(enabled) => handleNotificationPreferenceChange('delayAlerts', enabled)}
+            disabled={isLoadingNotificationPreferences || !profile?.id}
             accessibilityLabel="Toggle delay alerts"
+            accessibilityState={{ checked: notificationPreferences.delayAlerts, disabled: isLoadingNotificationPreferences || !profile?.id }}
           />
         </View>
         <View style={styles.settingRow}>
           <Text style={[styles.settingLabel, { color: palette.textStrong }]}>Weekly summary</Text>
           <Switch
             trackColor={{ false: palette.toggleTrack, true: theme.tint }}
-            value={weeklySummaryEnabled}
-            onValueChange={handleWeeklySummaryChange}
-            disabled={isLoadingWeeklySummary || !profile?.id}
+            value={notificationPreferences.weeklySummary}
+            onValueChange={(enabled) => handleNotificationPreferenceChange('weeklySummary', enabled)}
+            disabled={isLoadingNotificationPreferences || !profile?.id}
             accessibilityLabel="Toggle weekly summary"
-            accessibilityState={{ checked: weeklySummaryEnabled, disabled: isLoadingWeeklySummary || !profile?.id }}
+            accessibilityState={{ checked: notificationPreferences.weeklySummary, disabled: isLoadingNotificationPreferences || !profile?.id }}
           />
         </View>
-      </ThemedView>
+        <Text style={[styles.subtle, { color: palette.textSubtle, fontSize: 12 }]}>
+          Preferences are saved on this device. Push and weekly summary delivery are not active yet.
+        </Text>
+      </AccordionSection>
 
-      <ThemedView style={[styles.card, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-        <ThemedText type="subtitle">Account</ThemedText>
+      <AccordionSection title="Account" subtitle="Profile, permissions & access" icon="manage-accounts" borderColor={palette.border} backgroundColor={palette.cardBg} textColor={palette.textStrong} mutedColor={palette.textMuted} tintColor={theme.tint}>
         <Text style={[styles.subtle, { color: palette.textMuted }]}>
           Email: {profile?.email}
         </Text>
@@ -276,7 +293,7 @@ export default function SettingsScreen() {
           Current Role: <Text style={{ fontWeight: '700', color: palette.textStrong }}>{profile?.role}</Text>
         </Text>
         {primaryService === 'school' && (
-          <View style={{ marginTop: 12, gap: 10, paddingBottom: 80 }}>
+          <View style={{ marginTop: 12, gap: 10 }}>
             <Text style={[styles.subtle, { color: palette.textMuted, fontSize: 12 }]}>
               {profile?.role === 'admin'
                 ? 'Enter the admin code to refresh secure server access.'
@@ -338,11 +355,10 @@ export default function SettingsScreen() {
             </Pressable>
           </View>
         )}
-      </ThemedView>
+      </AccordionSection>
 
       {__DEV__ ? (
-        <ThemedView style={[styles.card, { backgroundColor: palette.cardBg, borderColor: palette.border }]}>
-          <ThemedText type="subtitle">Developer</ThemedText>
+        <AccordionSection title="Developer" subtitle="Diagnostics and development tools" icon="build-circle" borderColor={palette.border} backgroundColor={palette.cardBg} textColor={palette.textStrong} mutedColor={palette.textMuted} tintColor={theme.tint}>
           <Text style={[styles.subtle, { color: palette.textMuted }]}>
             Trigger the global error screen to verify it renders correctly.
           </Text>
@@ -355,7 +371,7 @@ export default function SettingsScreen() {
             accessibilityLabel="Trigger global error screen">
             <Text style={styles.devButtonText}>Test error screen</Text>
           </Pressable>
-        </ThemedView>
+        </AccordionSection>
       ) : null}
       </ScrollView>
     </KeyboardAvoidingView>

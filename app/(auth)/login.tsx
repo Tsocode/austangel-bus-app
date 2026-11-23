@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 
 import { SchoolRole, TravelRole, UserRole } from '@/models/user';
-import { getUserProfile, upsertUserProfile } from '@/services/firestore/users';
+import { upsertUserProfile } from '@/services/firestore/users';
 import { auth } from '@/services/firebase';
 import { useAuthContext } from '@/providers/AuthProvider';
 import { Colors } from '@/constants/Colors';
@@ -37,6 +37,14 @@ const TRAVEL_ROLES: { label: string; value: UserRole; description: string }[] = 
 ];
 
 type AuthMode = 'signin' | 'signup';
+const SUBMIT_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(operation: Promise<T>, message: string, timeoutMs = SUBMIT_TIMEOUT_MS): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    operation.then(resolve, reject).finally(() => clearTimeout(timeout));
+  });
+}
 
 export default function AuthLandingScreen() {
   const router = useRouter();
@@ -117,15 +125,21 @@ export default function AuthLandingScreen() {
     try {
       Keyboard.dismiss();
       if (mode === 'signin') {
-        const credential = await signInWithEmailAndPassword(auth, email.trim(), password);
-        const existingProfile = await getUserProfile(credential.user.uid);
-        if (existingProfile) await upsertUserProfile({ ...existingProfile, primaryService: selectedService });
+        await withTimeout(
+          signInWithEmailAndPassword(auth, email.trim(), password),
+          'Sign-in timed out. Check your connection and make sure Firebase is reachable.'
+        );
+        // Profile loading and service saving happen in AuthProvider; they must
+        // not hold this screen open after Firebase Authentication succeeds.
         await switchService?.(selectedService);
         router.replace(selectedService === 'travel' ? '/(travel)' : '/(tabs)');
       } else {
         const { firstName, lastName } = splitName(displayName);
-        const credential = await createUserWithEmailAndPassword(auth, email.trim(), password);
-        await upsertUserProfile({
+        const credential = await withTimeout(
+          createUserWithEmailAndPassword(auth, email.trim(), password),
+          'Account creation timed out. Check your connection and make sure Firebase is reachable.'
+        );
+        await withTimeout(upsertUserProfile({
           id: credential.user.uid,
           email: credential.user.email ?? email.trim(),
           role,
@@ -136,18 +150,25 @@ export default function AuthLandingScreen() {
           lastName,
           displayName: displayName || credential.user.email || 'Austangel User',
           createdAt: Date.now(),
-        });
+        }), 'Profile setup timed out. Your account was created, but setup could not finish.', 15_000);
         await switchService?.(selectedService);
         router.replace(selectedService === 'travel' ? '/(travel)' : '/(tabs)');
       }
 
     } catch (error) {
-      console.error('Auth failed:', error);
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'We could not complete the request. Please try again.';
-      Alert.alert(mode === 'signin' ? 'Login Error' : 'Signup Error', message);
+      const authError = error as { code?: string; message?: string };
+      const messages: Record<string, string> = {
+        'auth/user-not-found': 'No account was found for this email. Choose Create Account to register it first.',
+        'auth/invalid-credential': 'We could not sign you in. Check your email and password, or choose Create Account if you are new.',
+        'auth/wrong-password': 'That password is incorrect. Check it and try again.',
+        'auth/email-already-in-use': 'An account already uses this email. Switch to Sign In.',
+        'auth/weak-password': 'Choose a stronger password with at least 8 characters, including uppercase, lowercase, and a number.',
+        'auth/invalid-email': 'Enter a valid email address.',
+        'auth/network-request-failed': 'Could not reach Firebase. Check your connection and try again.',
+      };
+      const message = (authError.code && messages[authError.code]) ||
+        authError.message || 'We could not complete the request. Please try again.';
+      Alert.alert(mode === 'signin' ? 'Sign-in failed' : 'Account creation failed', message);
     } finally {
       setIsSubmitting(false);
     }

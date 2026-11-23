@@ -6,7 +6,9 @@
 - **Admin:** creates school buses and routes, assigns drivers and attendants through a callable Cloud Function, and assigns children to buses.
 - **Driver:** starts and finishes a trip for the assigned bus; while the trip is active and Driver Tools is open, foreground GPS updates are written to Realtime Database at `liveLocations/{busId}`.
 - **Attendant:** views the assigned bus's student roster and records boarding/drop-off events in Firestore `checkIns` during an active trip.
-- **Parent map:** displays the current bus position when available. Android uses the native Google map provider; iOS uses its default native map provider. Web does not render an interactive map.
+- **Parent map:** the native Track screen displays the current bus position when available. Expo Go on iOS uses its bundled native map; installed builds use the configured OpenStreetMap-based MapLibre map by default. The web Track screen provides a searchable place map, but does not currently show live school bus tracking.
+- **Route preview:** native Track can geocode addresses with Photon and request a driving route from the public OSRM demo service. A preview route and its generated intermediate points are not administrator-created school stops or a dispatched trip.
+- **Notification preferences:** Settings stores trip update, delay alert, and weekly summary preferences locally per user. Push alerts and delivered weekly summaries are not implemented.
 
 School GPS is not a background service. If the driver closes Driver Tools, the app is suspended, location permission is denied, or connectivity is lost, updates may stop or be delayed. There is no offline upload queue or location-history playback. The latest RTDB location is not automatically expired when a trip ends.
 

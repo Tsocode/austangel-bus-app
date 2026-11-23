@@ -11,6 +11,7 @@ const ExpoGoFreeMap = forwardRef<FreeMapController, FreeMapProps>(function ExpoG
   lines = [],
   onPanDrag,
   onMapReady,
+  onPress,
 }, ref) {
   const mapRef = useRef<any>(null);
 
@@ -43,6 +44,7 @@ const ExpoGoFreeMap = forwardRef<FreeMapController, FreeMapProps>(function ExpoG
         initialRegion={initialRegion}
         onPanDrag={onPanDrag}
         onMapReady={onMapReady}
+        onPress={(event) => onPress?.(event.nativeEvent.coordinate)}
         showsCompass
         showsUserLocation>
         {lines.map((line) => line.coordinates.length > 1 ? (

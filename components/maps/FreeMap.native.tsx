@@ -28,6 +28,7 @@ export type FreeMapProps = {
   lines?: FreeMapLine[];
   onPanDrag?: () => void;
   onMapReady?: () => void;
+  onPress?: (coordinate: MapCoordinate) => void;
 };
 
 const FreeMap = forwardRef<FreeMapController, FreeMapProps>(function FreeMap(props, ref) {

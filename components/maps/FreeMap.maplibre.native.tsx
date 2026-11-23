@@ -32,6 +32,7 @@ const FreeMapMapLibre = forwardRef<FreeMapController, FreeMapProps>(function Fre
   lines = [],
   onPanDrag,
   onMapReady,
+  onPress,
 }, ref) {
   const cameraRef = useRef<CameraRef>(null);
   const lineData = lines.length ? {
@@ -88,6 +89,10 @@ const FreeMapMapLibre = forwardRef<FreeMapController, FreeMapProps>(function Fre
         attributionPosition={{ bottom: 8, right: 8 }}
         logo={false}
         compass
+        onPress={(event) => {
+          const [longitude, latitude] = event.nativeEvent.lngLat;
+          onPress?.({ latitude, longitude });
+        }}
         onRegionWillChange={(event) => {
           if (event.nativeEvent.userInteraction) onPanDrag?.();
         }}

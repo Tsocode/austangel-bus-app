@@ -89,7 +89,6 @@ import { getBus, listBuses, listBusesForParent, listBusesForSchoolStaff, updateB
 import { getRoute } from '@/services/firestore/routes';
 import { LiveLocation, subscribeToLiveLocation, updateLiveLocation } from '@/services/realtime/locations';
 import { realtimeDb } from '@/services/firebase';
-import { searchOpenMapPlaces } from '@/services/maps/openMapGeocoding';
 
 type Coordinate = { latitude: number; longitude: number };
 
@@ -242,11 +241,18 @@ export default function TrackScreen() {
   const [trailCoords, setTrailCoords] = useState<Coordinate[]>([]);
   const [routePolyline, setRoutePolyline] = useState<Coordinate[]>([]);
   const [routeStops, setRouteStops] = useState<RouteStop[]>([]);
-  const [routeDurationSeconds, setRouteDurationSeconds] = useState<number | null>(null);
-  const [startQuery, setStartQuery] = useState('Carlton Gate Estate, Chevron Drive, Lekki');
-  const [endQuery, setEndQuery] = useState('Ikorodu Central, Lagos');
+  const [plannedRoutePolyline, setPlannedRoutePolyline] = useState<Coordinate[]>([]);
+  const [plannedRouteDurationSeconds, setPlannedRouteDurationSeconds] = useState<number | null>(null);
+  const [plannedRouteDistanceMeters, setPlannedRouteDistanceMeters] = useState<number | null>(null);
+  const [startQuery, setStartQuery] = useState('');
+  const [endQuery, setEndQuery] = useState('');
   const [startCoord, setStartCoord] = useState<Coordinate | null>(null);
   const [endCoord, setEndCoord] = useState<Coordinate | null>(null);
+  const [routePickerVisible, setRoutePickerVisible] = useState(false);
+  const [routePickerField, setRoutePickerField] = useState<'start' | 'destination' | null>(null);
+  const [routePickerQuery, setRoutePickerQuery] = useState('');
+  const [isLocatingRoutePoint, setIsLocatingRoutePoint] = useState(false);
+  const [isPickingRoutePoint, setIsPickingRoutePoint] = useState(false);
   const [isRouting, setIsRouting] = useState(false);
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [isRoutePlannerExpanded, setIsRoutePlannerExpanded] = useState(false);
@@ -255,6 +261,7 @@ export default function TrackScreen() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [zoomDelta, setZoomDelta] = useState({ latitudeDelta: 0.03, longitudeDelta: 0.03 });
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
+  const [showFullscreenStatus, setShowFullscreenStatus] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentSpeed, setCurrentSpeed] = useState<number | null>(null);
   const [clockNow, setClockNow] = useState(Date.now());
@@ -267,6 +274,7 @@ export default function TrackScreen() {
   // Realtime Database rules scope this node to auth.uid; never fall back to a bus or guest ID.
   const safetyTripId = firebaseUser?.uid ?? '';
   const mapRef = useRef<MapViewInstance | null>(null);
+  const scrollViewRef = useRef<any>(null);
   const simulationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const simulationStep = useRef(0);
   const stopScheduleRef = useRef<{ index: number; stop: RouteStop; dwellSeconds: number }[]>([]);
@@ -307,6 +315,11 @@ export default function TrackScreen() {
 
   const lastUpdatedAt = liveLocation?.updatedAt ?? null;
   const isStale = lastUpdatedAt ? clockNow - lastUpdatedAt > 2 * 60 * 1000 : false;
+  const busStatus = liveLocation ? (isStale ? 'GPS signal lost' : 'Bus live') : 'Waiting for GPS';
+  const busStatusColor = liveLocation ? (isStale ? '#d97706' : '#16a34a') : '#64748b';
+  const routeSummary = route.id === 'planned-route'
+      ? 'Route not assigned'
+      : routePoints.length ? `${routePoints.length} stops` : 'No stops assigned';
 
   useEffect(() => {
     const timer = setInterval(() => setClockNow(Date.now()), 15_000);
@@ -314,7 +327,7 @@ export default function TrackScreen() {
   }, []);
   const etaSeconds = useMemo(() => {
     if (!simulationPath.length) return null;
-    const baseDuration = routeDurationSeconds ?? Math.max(1, simulationPath.length * 2.5);
+    const baseDuration = Math.max(1, simulationPath.length * 2.5);
     const travelDuration = baseDuration * SIMULATION_SPEED_MULTIPLIER;
     const progressRatio = simulationPath.length > 1 ? currentIndex / (simulationPath.length - 1) : 1;
     const remainingTravelSeconds = Math.max(0, travelDuration * (1 - progressRatio));
@@ -331,7 +344,7 @@ export default function TrackScreen() {
       remainingDwell += stop.dwellSeconds;
     });
     return Math.ceil(remainingTravelSeconds) + remainingDwell;
-  }, [simulationPath, currentIndex, pauseUntil, routeDurationSeconds]);
+  }, [simulationPath, currentIndex, pauseUntil]);
 
   useEffect(() => {
     if (followBus && mapRef.current && currentLocation) {
@@ -355,6 +368,15 @@ export default function TrackScreen() {
       });
     }
   }, [routePolyline]);
+
+  useEffect(() => {
+    if (plannedRoutePolyline.length > 1 && mapRef.current) {
+      mapRef.current.fitToCoordinates(plannedRoutePolyline, {
+        edgePadding: { top: 80, right: 60, bottom: 120, left: 60 },
+        animated: true,
+      });
+    }
+  }, [plannedRoutePolyline]);
 
   useEffect(() => {
     let isMounted = true;
@@ -510,40 +532,10 @@ export default function TrackScreen() {
     pauseUntilRef.current = null;
   };
 
-  const geocodeAddress = async (query: string): Promise<Coordinate> => {
-    const trimmed = query.trim();
-    const match = trimmed.match(
-      /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i
-    );
-    if (match) {
-      return { latitude: Number(match[1]), longitude: Number(match[2]) };
-    }
-    const results = await searchOpenMapPlaces(trimmed, 1);
-    if (!results.length) throw new Error('No results');
-    return { latitude: results[0].latitude, longitude: results[0].longitude };
-  };
-
-  const fallbackLookup = (query: string): Coordinate | null => {
-    const lower = query.toLowerCase();
-    if (lower.includes('carlton gate')) {
-      return { latitude: 6.4428, longitude: 3.5284 };
-    }
-    if (lower.includes('ikorodu')) {
-      return { latitude: 6.6194, longitude: 3.5105 };
-    }
-    if (lower.includes('banana island')) {
-      return { latitude: 6.4654, longitude: 3.4441 };
-    }
-    if (lower.includes('akute')) {
-      return { latitude: 6.6891, longitude: 3.3718 };
-    }
-    return null;
-  };
-
   const fetchRoutePolyline = async (
     start: Coordinate,
     end: Coordinate
-  ): Promise<{ polyline: Coordinate[]; durationSeconds: number | null }> => {
+  ): Promise<{ polyline: Coordinate[]; durationSeconds: number | null; distanceMeters: number | null }> => {
     console.log('Route request', { start, end });
     const url = `https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson`;
     const response = await fetch(url);
@@ -560,6 +552,9 @@ export default function TrackScreen() {
     const durationSeconds = typeof data?.routes?.[0]?.duration === 'number'
       ? data.routes[0].duration
       : null;
+    const distanceMeters = typeof data?.routes?.[0]?.distance === 'number'
+      ? data.routes[0].distance
+      : null;
     console.log('Route points', coords.length);
     if (!coords.length) {
       throw new Error('Route not found');
@@ -571,73 +566,26 @@ export default function TrackScreen() {
     const polyline = coords
       .filter((_, index) => index % step === 0)
       .map(([lon, lat]) => ({ latitude: lat, longitude: lon }));
-    return { polyline, durationSeconds };
+    return { polyline, durationSeconds, distanceMeters };
   };
 
-  const buildStopSchedule = (polyline: Coordinate[]) => {
-    if (polyline.length < 2) {
-      stopScheduleRef.current = [];
-      return [];
-    }
-    const stopCount = Math.min(10, Math.max(5, Math.floor(polyline.length / 12)));
-    const interval = Math.floor(polyline.length / (stopCount + 1));
-    const stops: RouteStop[] = [];
-    const schedule: { index: number; stop: RouteStop; dwellSeconds: number }[] = [];
-    for (let i = 1; i <= stopCount; i += 1) {
-      const index = Math.min(polyline.length - 1, i * interval);
-      const coord = polyline[index];
-      const dwellSeconds = 60 + ((index * 37) % 241);
-      const stop: RouteStop = {
-        id: `stop-${i}`,
-        name: `Stop ${i}`,
-        latitude: coord.latitude,
-        longitude: coord.longitude,
-        order: i,
-      };
-      stops.push(stop);
-      schedule.push({ index, stop, dwellSeconds });
-    }
-    stopScheduleRef.current = schedule;
-    return stops;
-  };
-
-  const handleBuildTypedRoute = async () => {
-    if (!startQuery.trim() || !endQuery.trim()) {
-      Alert.alert('Missing locations', 'Enter both start and destination addresses.');
+  const handlePlanRoute = async () => {
+    if (!startCoord || !endCoord) {
+      Alert.alert('Choose both locations', 'Select a starting point and destination, or use My Current Location.');
       return;
     }
     setIsGeocoding(true);
     setIsRouting(true);
     try {
-      const [start, end] = await Promise.all([
-        geocodeAddress(startQuery.trim()).catch(() => {
-          const fallback = fallbackLookup(startQuery);
-          if (!fallback) throw new Error('Start not found');
-          return fallback;
-        }),
-        geocodeAddress(endQuery.trim()).catch(() => {
-          const fallback = fallbackLookup(endQuery);
-          if (!fallback) throw new Error('End not found');
-          return fallback;
-        }),
-      ]);
-      setStartCoord(start);
-      setEndCoord(end);
-      const { polyline, durationSeconds } = await fetchRoutePolyline(start, end);
-      const stops = buildStopSchedule(polyline);
-      setRoute({
-        id: 'typed-route',
-        name: `${startQuery.trim()} to ${endQuery.trim()}`,
-        stops,
+      const { polyline, durationSeconds, distanceMeters } = await fetchRoutePolyline(startCoord, endCoord);
+      setPlannedRoutePolyline(polyline);
+      setPlannedRouteDurationSeconds(durationSeconds);
+      setPlannedRouteDistanceMeters(distanceMeters);
+      setFollowBus(false);
+      mapRef.current?.fitToCoordinates(polyline, {
+        edgePadding: { top: 80, right: 60, bottom: 120, left: 60 },
+        animated: true,
       });
-      setRouteStops(stops);
-      setRoutePolyline(polyline);
-      setRouteDurationSeconds(durationSeconds);
-      setTrailCoords([]);
-      setCurrentStop(null);
-      setPauseUntil(null);
-      pauseUntilRef.current = null;
-      visitedStopsRef.current = new Set();
     } catch (error) {
       console.warn('Route lookup failed', error);
       Alert.alert('Route failed', 'Unable to build a route for those locations.');
@@ -647,23 +595,16 @@ export default function TrackScreen() {
     }
   };
 
-  const handleDestinationSelect = async (place: PlaceResult) => {
+  const handleDestinationSelect = (place: PlaceResult) => {
     const destination = { latitude: place.latitude, longitude: place.longitude };
     setDestinationSearch(place.address);
     setEndQuery(place.address);
     setEndCoord(destination);
+    setPlannedRoutePolyline([]);
+    setPlannedRouteDurationSeconds(null);
+    setPlannedRouteDistanceMeters(null);
     setFollowBus(false);
-    try {
-      const { polyline, durationSeconds } = await fetchRoutePolyline(currentLocation, destination);
-      setRoutePolyline(polyline);
-      setRouteDurationSeconds(durationSeconds);
-      if (mapRef.current) mapRef.current.fitToCoordinates([currentLocation, destination], {
-        edgePadding: { top: 100, right: 60, bottom: 130, left: 60 }, animated: true,
-      });
-    } catch (error) {
-      console.warn('Could not calculate destination route', error);
-      setRoutePolyline([currentLocation, destination]);
-    }
+    mapRef.current?.animateToRegion({ ...destination, ...zoomDelta }, 350);
   };
 
   const publishSafetyPosition = async (position: Location.LocationObject) => {
@@ -732,24 +673,96 @@ export default function TrackScreen() {
     } },
   ]);
 
-  const handleResetToFallback = () => {
-    setRoute(ROUTE_PLACEHOLDER);
-    setRouteStops([]);
-    setRoutePolyline([]);
-    setRouteDurationSeconds(null);
-    stopScheduleRef.current = [];
-    setTrailCoords([]);
+  const handleClearRoutePlan = () => {
+    setPlannedRoutePolyline([]);
+    setPlannedRouteDurationSeconds(null);
+    setPlannedRouteDistanceMeters(null);
+    setStartQuery('');
+    setEndQuery('');
     setStartCoord(null);
     setEndCoord(null);
-    setCurrentStop(null);
-    setPauseUntil(null);
-    pauseUntilRef.current = null;
+    setDestinationSearch('');
   };
 
-  const nextStopInfo = useMemo(() => {
-    const upcoming = stopScheduleRef.current.find((stop) => stop.index >= currentIndex);
-    return upcoming?.stop ?? null;
-  }, [currentIndex]);
+  const openRouteLocationPicker = (field: 'start' | 'destination') => {
+    setRoutePickerField(field);
+    setRoutePickerQuery('');
+    setRoutePickerVisible(true);
+  };
+
+  const selectRouteLocation = (field: 'start' | 'destination', label: string, coordinate: Coordinate) => {
+    if (field === 'start') {
+      setStartQuery(label);
+      setStartCoord(coordinate);
+    } else {
+      setEndQuery(label);
+      setEndCoord(coordinate);
+    }
+    setPlannedRoutePolyline([]);
+    setPlannedRouteDurationSeconds(null);
+    setPlannedRouteDistanceMeters(null);
+    setRoutePickerVisible(false);
+    setRoutePickerField(null);
+    setIsPickingRoutePoint(false);
+    setFollowBus(false);
+    mapRef.current?.animateToRegion({ ...coordinate, ...zoomDelta }, 350);
+  };
+
+  const useDeviceLocationForRoute = async () => {
+    if (!routePickerField) return;
+    setIsLocatingRoutePoint(true);
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Location permission needed', 'Allow location access to use your current location. You can still search for an address or choose a point on the map.');
+        return;
+      }
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      selectRouteLocation(routePickerField, 'My Current Location', {
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      });
+    } catch (error) {
+      Alert.alert('Location unavailable', error instanceof Error ? error.message : 'Could not get your current location. Search for an address or choose a point on the map.');
+    } finally {
+      setIsLocatingRoutePoint(false);
+    }
+  };
+
+  const handleRouteMapPress = (coordinate: Coordinate) => {
+    if (!isPickingRoutePoint || !routePickerField) return;
+    const label = `Pinned location (${coordinate.latitude.toFixed(4)}, ${coordinate.longitude.toFixed(4)})`;
+    selectRouteLocation(routePickerField, label, coordinate);
+  };
+
+  const selectRouteSearchResult = (place: PlaceResult) => {
+    if (!routePickerField) return;
+    if (!Number.isFinite(place.latitude) || !Number.isFinite(place.longitude)) {
+      Alert.alert('Location unavailable', 'We could not get coordinates for that result. Try another search or choose a point on the map.');
+      return;
+    }
+    selectRouteLocation(routePickerField, place.address || place.title, {
+      latitude: place.latitude,
+      longitude: place.longitude,
+    });
+  };
+
+  const chooseRoutePointOnMap = () => {
+    if (!routePickerField) return;
+    setRoutePickerVisible(false);
+    setIsPickingRoutePoint(true);
+    requestAnimationFrame(() => scrollViewRef.current?.scrollTo({ y: 0, animated: true }));
+  };
+
+  const swapRouteLocations = () => {
+    setStartQuery(endQuery);
+    setEndQuery(startQuery);
+    setStartCoord(endCoord);
+    setEndCoord(startCoord);
+    setPlannedRoutePolyline([]);
+    setPlannedRouteDurationSeconds(null);
+    setPlannedRouteDistanceMeters(null);
+  };
 
   const handleSaveDriverName = async () => {
     if (!selectedBusId) {
@@ -825,21 +838,6 @@ export default function TrackScreen() {
   }
 
   const requiresAssignment = role === 'driver' || role === 'attendant';
-  if (requiresAssignment && !buses.length) {
-    return (
-      <SafeAreaView style={[styles.safeArea, { backgroundColor: palette.screenBg }]}>
-        <ScrollView style={[styles.screen, { backgroundColor: palette.screenBg }]} contentContainerStyle={{ paddingBottom: 32 }}>
-          <View style={[styles.infoCard, { backgroundColor: palette.cardBg }]}>
-            <Text style={[styles.infoTitle, { color: palette.textStrong }]}>No bus assigned</Text>
-            <Text style={[styles.infoText, { color: palette.textMuted }]}>
-              Ask an admin to assign a bus/route to your profile. Tracking is hidden until then.
-            </Text>
-          </View>
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
   const renderMapView = (style: StyleProp<ViewStyle>) => {
     if (!USE_GOOGLE_MAPS && FreeMap) {
       const points = [
@@ -867,12 +865,15 @@ export default function TrackScreen() {
           points={points}
           lines={[
             { id: 'route', coordinates: routePolyline, color: '#93c5fd', width: 5 },
+            { id: 'planned-route', coordinates: plannedRoutePolyline, color: '#f97316', width: 5 },
             { id: 'live-trail', coordinates: trailCoords, color: '#2563eb', width: 6 },
           ]}
           onPanDrag={() => setFollowBus(false)}
+          onPress={handleRouteMapPress}
           onMapReady={() => {
-            if (routePolyline.length > 1) {
-              mapRef.current?.fitToCoordinates(routePolyline, {
+            const focusPath = plannedRoutePolyline.length > 1 ? plannedRoutePolyline : routePolyline;
+            if (focusPath.length > 1) {
+              mapRef.current?.fitToCoordinates(focusPath, {
                 edgePadding: { top: 80, right: 60, bottom: 120, left: 60 },
                 animated: false,
               });
@@ -900,9 +901,11 @@ export default function TrackScreen() {
       <MapView
         ref={mapRef}
         style={style}
+        onPress={(event: any) => handleRouteMapPress(event.nativeEvent.coordinate)}
         onMapReady={() => {
-          if (routePolyline.length > 1) {
-            mapRef.current?.fitToCoordinates(routePolyline, {
+          const focusPath = plannedRoutePolyline.length > 1 ? plannedRoutePolyline : routePolyline;
+          if (focusPath.length > 1) {
+            mapRef.current?.fitToCoordinates(focusPath, {
               edgePadding: { top: 80, right: 60, bottom: 120, left: 60 },
               animated: false,
             });
@@ -930,22 +933,11 @@ export default function TrackScreen() {
         {routePolyline.length > 1 ? (
           <Polyline coordinates={routePolyline} strokeWidth={5} strokeColor="#93c5fd" />
         ) : null}
+        {plannedRoutePolyline.length > 1 ? (
+          <Polyline coordinates={plannedRoutePolyline} strokeWidth={5} strokeColor="#f97316" lineDashPattern={[12, 6]} />
+        ) : null}
         {trailCoords.length > 1 ? (
           <Polyline coordinates={trailCoords} strokeWidth={6} strokeColor="#2563eb" />
-        ) : null}
-        {endCoord ? (
-          <Marker
-            coordinate={endCoord}
-            title="Selected destination"
-            pinColor="#ef4444"
-          />
-        ) : null}
-        {startCoord ? (
-          <Marker
-            coordinate={startCoord}
-            title="Selected start"
-            pinColor="#22c55e"
-          />
         ) : null}
         {routePoints.map((stop) => (
           <Marker
@@ -1048,26 +1040,25 @@ export default function TrackScreen() {
         onRequestClose={() => setIsMapFullscreen(false)}>
         <SafeAreaView style={styles.fullscreenContainer}>
           {renderMapView(styles.fullscreenMap)}
-          <View style={[styles.routeLabels, styles.fullscreenLabels, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
+          {isPickingRoutePoint ? (
+            <View style={[styles.mapPickerPrompt, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
+              <Text style={[styles.mapPickerPromptText, { color: palette.textStrong }]}>Tap the map to choose a {routePickerField === 'start' ? 'starting point' : 'destination'}.</Text>
+              <Pressable onPress={() => setIsPickingRoutePoint(false)} accessibilityRole="button"><Text style={[styles.mapPickerCancel, { color: theme.tint }]}>Cancel</Text></Pressable>
+            </View>
+          ) : <View style={[styles.routeLabels, styles.fullscreenLabels, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
             <View style={styles.routeLabelRow}>
               <View style={[styles.routeDot, { backgroundColor: '#22c55e' }]} />
               <Text style={[styles.routeLabelText, { color: palette.textMuted }]}>
-                Start: {startCoord ? startQuery.trim() || 'Selected' : 'Default'}
+                Start: {startCoord ? startQuery.trim() || 'Selected' : 'Not selected'}
               </Text>
             </View>
             <View style={styles.routeLabelRow}>
               <View style={[styles.routeDot, { backgroundColor: '#ef4444' }]} />
               <Text style={[styles.routeLabelText, { color: palette.textMuted }]}>
-                End: {endCoord ? endQuery.trim() || 'Selected' : 'Default'}
+                End: {endCoord ? endQuery.trim() || 'Selected' : 'Not selected'}
               </Text>
             </View>
-            <View style={styles.routeLabelRow}>
-              <View style={[styles.routeDot, { backgroundColor: '#3b82f6' }]} />
-              <Text style={[styles.routeLabelText, { color: palette.textMuted }]}>
-                Next: {nextStopInfo?.name ?? '—'}
-              </Text>
-            </View>
-          </View>
+          </View>}
           <View style={[styles.mapLegend, styles.fullscreenLegend, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
             <View style={styles.legendRow}>
               <View style={[styles.legendDot, { backgroundColor: '#93c5fd' }]} />
@@ -1081,25 +1072,132 @@ export default function TrackScreen() {
               <View style={[styles.legendDot, { backgroundColor: '#1d4ed8' }]} />
               <Text style={[styles.legendText, { color: palette.textMuted }]}>Bus</Text>
             </View>
+            {plannedRoutePolyline.length > 1 ? <View style={styles.legendRow}>
+              <View style={[styles.legendDot, { backgroundColor: '#f97316' }]} />
+              <Text style={[styles.legendText, { color: palette.textMuted }]}>Planned route</Text>
+            </View> : null}
           </View>
+          {!isPickingRoutePoint && showFullscreenStatus ? (
+            <View style={[styles.fullscreenStatus, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
+              <View style={styles.fullscreenStatusTop}>
+                <View style={[styles.statusDot, { backgroundColor: busStatusColor }]} />
+                <Text style={[styles.fullscreenStatusTitle, { color: palette.textStrong }]}>{busStatus}</Text>
+                <Pressable onPress={() => setShowFullscreenStatus(false)} accessibilityRole="button" accessibilityLabel="Hide bus status">
+                  <MaterialIcons name="close" size={20} color={palette.textMuted} />
+                </Pressable>
+              </View>
+              <Text style={[styles.fullscreenStatusDetails, { color: palette.textMuted }]} numberOfLines={1}>
+                {selectedBus?.driverName ? `Driver: ${selectedBus.driverName}  ·  ` : ''}
+                {liveLocation?.speed != null ? `${Math.round(liveLocation.speed)} km/h  ·  ` : ''}
+                {lastUpdatedAt ? `Updated ${formatAge(lastUpdatedAt)}` : 'Awaiting first location'}
+              </Text>
+            </View>
+          ) : !isPickingRoutePoint ? (
+            <Pressable style={[styles.showFullscreenStatus, { backgroundColor: palette.cardBg }]} onPress={() => setShowFullscreenStatus(true)} accessibilityRole="button" accessibilityLabel="Show bus status">
+              <MaterialIcons name="directions-bus" size={20} color={theme.tint} />
+            </Pressable>
+          ) : null}
           {renderMapControls(true)}
         </SafeAreaView>
+      </Modal>
+      <Modal
+        visible={routePickerVisible}
+        transparent
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => {
+          setRoutePickerVisible(false);
+          setRoutePickerField(null);
+        }}>
+        <View style={styles.routePickerModal}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => {
+              setRoutePickerVisible(false);
+              setRoutePickerField(null);
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Close location picker" />
+          <KeyboardAvoidingView style={styles.routePickerKeyboard} behavior={Platform.select({ ios: 'padding', android: undefined })}>
+            <View style={[styles.routePickerSheet, { backgroundColor: palette.cardBg }]}>
+              <View style={styles.routePickerHandle} />
+              <View style={styles.routePickerHeader}>
+                <View style={{ flex: 1, gap: 4 }}>
+                  <Text style={[styles.routePickerTitle, { color: palette.textStrong }]}>
+                    Choose {routePickerField === 'start' ? 'Starting Point' : 'Destination'}
+                  </Text>
+                  <Text style={[styles.routePickerSubtitle, { color: palette.textMuted }]}>Search a place or use your location</Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    setRoutePickerVisible(false);
+                    setRoutePickerField(null);
+                  }}
+                  style={styles.routePickerClose}
+                  accessibilityRole="button"
+                  accessibilityLabel="Close location picker">
+                  <MaterialIcons name="close" size={22} color={palette.textMuted} />
+                </Pressable>
+              </View>
+              <LocationAutocomplete
+                label="Search places or addresses"
+                placeholder="School, landmark, or address"
+                value={routePickerQuery}
+                onChangeText={setRoutePickerQuery}
+                onSelect={selectRouteSearchResult}
+              />
+              <Pressable
+                style={[styles.locationChoice, { borderColor: palette.cardBorder }]}
+                onPress={() => void useDeviceLocationForRoute()}
+                disabled={isLocatingRoutePoint}
+                accessibilityRole="button"
+                accessibilityLabel="Use my current location">
+                <View style={[styles.locationChoiceIcon, { backgroundColor: theme.tint }]}>
+                  {isLocatingRoutePoint ? <ActivityIndicator color="#fff" size="small" /> : <MaterialIcons name="my-location" size={19} color="#fff" />}
+                </View>
+                <View style={styles.locationChoiceText}>
+                  <Text style={[styles.locationChoiceTitle, { color: palette.textStrong }]}>My Current Location</Text>
+                  <Text style={[styles.locationChoiceSubtitle, { color: palette.textMuted }]}>Device location requested only when selected</Text>
+                </View>
+                <MaterialIcons name="chevron-right" size={22} color={palette.textMuted} />
+              </Pressable>
+              <Pressable
+                style={[styles.locationChoice, { borderColor: palette.cardBorder }]}
+                onPress={chooseRoutePointOnMap}
+                accessibilityRole="button"
+                accessibilityLabel="Choose a location on the map">
+                <View style={[styles.locationChoiceIcon, { backgroundColor: theme.surfaceMuted }]}>
+                  <MaterialIcons name="add-location-alt" size={19} color={theme.tint} />
+                </View>
+                <View style={styles.locationChoiceText}>
+                  <Text style={[styles.locationChoiceTitle, { color: palette.textStrong }]}>Choose on Map</Text>
+                  <Text style={[styles.locationChoiceSubtitle, { color: palette.textMuted }]}>Tap the map to place a pin</Text>
+                </View>
+                <MaterialIcons name="chevron-right" size={22} color={palette.textMuted} />
+              </Pressable>
+              <Text style={[styles.routePickerFootnote, { color: palette.textMuted }]}>If location permission is denied, search for an address or select a point on the map instead.</Text>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
       </Modal>
       <SettingsButton />
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
         <ScrollView
+          ref={scrollViewRef}
           style={[styles.screen, { backgroundColor: palette.screenBg }]}
           contentContainerStyle={{ paddingTop: 72, paddingBottom: 32 }}
           keyboardShouldPersistTaps="handled">
         <View style={[styles.banner, { backgroundColor: palette.bannerBg }]}>
           <Text style={[styles.bannerText, { color: palette.bannerText }]}>
-            {liveLocation
+            {requiresAssignment && !buses.length
+              ? 'No bus assigned yet. You can still plan a personal route below.'
+              : liveLocation
               ? isStale ? 'Bus location is delayed. Check the last update below.' : 'Showing the latest bus location.'
               : 'Waiting for the driver to share a bus location.'}
           </Text>
         </View>
 
-      <View style={styles.selectorSection}>
+      {buses.length ? <View style={styles.selectorSection}>
         <Text style={[styles.sectionLabel, { color: palette.textStrong }]}>Select Bus:</Text>
         <View style={styles.busButtonRow}>
           {buses.map((bus) => {
@@ -1124,7 +1222,7 @@ export default function TrackScreen() {
             );
           })}
         </View>
-      </View>
+      </View> : null}
 
       <View style={{ zIndex: 12, marginBottom: 12 }}>
         <LocationAutocomplete placeholder="Search destination or location" value={destinationSearch}
@@ -1138,26 +1236,25 @@ export default function TrackScreen() {
         ) : (
           renderMapView(styles.map)
         )}
-        <View style={[styles.routeLabels, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
+        {isPickingRoutePoint ? (
+          <View style={[styles.mapPickerPrompt, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
+            <Text style={[styles.mapPickerPromptText, { color: palette.textStrong }]}>Tap the map to choose a {routePickerField === 'start' ? 'starting point' : 'destination'}.</Text>
+            <Pressable onPress={() => setIsPickingRoutePoint(false)} accessibilityRole="button"><Text style={[styles.mapPickerCancel, { color: theme.tint }]}>Cancel</Text></Pressable>
+          </View>
+        ) : <View style={[styles.routeLabels, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
           <View style={styles.routeLabelRow}>
             <View style={[styles.routeDot, { backgroundColor: '#22c55e' }]} />
             <Text style={[styles.routeLabelText, { color: palette.textMuted }]}>
-              Start: {startCoord ? startQuery.trim() || 'Selected' : 'Default'}
+              Start: {startCoord ? startQuery.trim() || 'Selected' : 'Not selected'}
             </Text>
           </View>
           <View style={styles.routeLabelRow}>
             <View style={[styles.routeDot, { backgroundColor: '#ef4444' }]} />
             <Text style={[styles.routeLabelText, { color: palette.textMuted }]}>
-              End: {endCoord ? endQuery.trim() || 'Selected' : 'Default'}
+              End: {endCoord ? endQuery.trim() || 'Selected' : 'Not selected'}
             </Text>
           </View>
-          <View style={styles.routeLabelRow}>
-            <View style={[styles.routeDot, { backgroundColor: '#3b82f6' }]} />
-            <Text style={[styles.routeLabelText, { color: palette.textMuted }]}>
-              Next: {nextStopInfo?.name ?? '—'}
-            </Text>
-          </View>
-        </View>
+        </View>}
         <View style={[styles.mapLegend, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
           <View style={styles.legendRow}>
             <View style={[styles.legendDot, { backgroundColor: '#93c5fd' }]} />
@@ -1171,28 +1268,33 @@ export default function TrackScreen() {
             <View style={[styles.legendDot, { backgroundColor: '#1d4ed8' }]} />
             <Text style={[styles.legendText, { color: palette.textMuted }]}>Bus</Text>
           </View>
+          {plannedRoutePolyline.length > 1 ? <View style={styles.legendRow}>
+            <View style={[styles.legendDot, { backgroundColor: '#f97316' }]} />
+            <Text style={[styles.legendText, { color: palette.textMuted }]}>Planned route</Text>
+          </View> : null}
         </View>
         {isMapFullscreen ? null : renderMapControls(false)}
       </View>
 
-      <View style={[styles.infoCard, { backgroundColor: palette.cardBg }]}>
-        <Text style={[styles.infoTitle, { color: palette.textStrong }]}>
-          {selectedBus?.nickname ?? 'Austangel Bus'} - {route?.name ?? 'Route'}
-        </Text>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>📍</Text>
-          <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            {liveLocation ? 'Live bus GPS received' : 'Waiting for bus GPS'}
-          </Text>
+      <View style={[styles.infoCard, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
+        <View style={styles.trackingHeader}>
+          <View style={{ flex: 1, gap: 5 }}>
+            <Text style={[styles.infoTitle, { color: palette.textStrong }]}>Austangel Bus Tracking</Text>
+            <View style={styles.statusBadge}>
+              <View style={[styles.statusDot, { backgroundColor: busStatusColor }]} />
+              <Text style={[styles.statusBadgeText, { color: busStatusColor }]}>{busStatus}</Text>
+            </View>
+          </View>
+          {liveLocation?.speed != null ? (
+            <View style={styles.speedBadge}>
+              <MaterialIcons name="speed" size={17} color={theme.tint} />
+              <Text style={[styles.speedBadgeText, { color: palette.textStrong }]}>{Math.round(liveLocation.speed)} km/h</Text>
+            </View>
+          ) : null}
         </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>⚡</Text>
-          <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            Speed: {liveLocation?.speed == null ? '—' : `${Math.round(liveLocation.speed)} km/h`}
-          </Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>🚌</Text>
+        <View style={styles.trackingGrid}>
+          <View style={[styles.trackingMetric, { backgroundColor: palette.screenBg }]}>
+            <Text style={[styles.metricLabel, { color: palette.textMuted }]}>Driver</Text>
           {role === 'admin' && isEditingDriver ? (
             <View style={styles.editRow}>
               <TextInput
@@ -1214,8 +1316,8 @@ export default function TrackScreen() {
               </Pressable>
             </View>
           ) : (
-            <Text style={[styles.infoText, { color: palette.textMuted }]}>
-              Driver: {selectedBus?.driverName ?? 'Assign driver'}
+              <Text style={[styles.metricValue, { color: palette.textStrong }]}>
+              {selectedBus?.driverName ?? 'Driver not assigned'}
               {role === 'admin' ? (
                 <Text style={[styles.editLink, { color: theme.tint }]} onPress={() => setIsEditingDriver(true)}>
                   {' '}
@@ -1225,26 +1327,18 @@ export default function TrackScreen() {
             </Text>
           )}
         </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>📍</Text>
-          <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            {routePoints.length ? `Assigned route has ${routePoints.length} stops` : 'No assigned route stops'}
-          </Text>
+          <View style={[styles.trackingMetric, { backgroundColor: palette.screenBg }]}>
+            <Text style={[styles.metricLabel, { color: palette.textMuted }]}>Route</Text>
+            <Text style={[styles.metricValue, { color: palette.textStrong }]} numberOfLines={1}>{routeSummary}</Text>
+          </View>
+          <View style={[styles.trackingMetric, { backgroundColor: palette.screenBg }]}>
+            <Text style={[styles.metricLabel, { color: palette.textMuted }]}>Last updated</Text>
+            <Text style={[styles.metricValue, { color: palette.textStrong }]}>{lastUpdatedAt ? `${formatAge(lastUpdatedAt)}${isStale ? ' · Stale' : ''}` : 'Awaiting first location'}</Text>
+          </View>
         </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>🛣️</Text>
-          <Text style={[styles.infoText, { color: palette.textMuted }]}>
-          </Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>⏱️</Text>
-          <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            Last update: {lastUpdatedAt ? formatAge(lastUpdatedAt) : 'Waiting for first location…'}{' '}
-            {isStale ? '(stale)' : ''}
-          </Text>
-        </View>
+      </View>
 
-        <View style={[styles.routeForm, { borderColor: palette.cardBorder }]}>
+      <View style={[styles.routeForm, styles.routePlannerCard, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
           <Pressable
             style={styles.routePlannerHeader}
             onPress={() => setIsRoutePlannerExpanded((expanded) => !expanded)}
@@ -1256,70 +1350,88 @@ export default function TrackScreen() {
                 <MaterialIcons name="alt-route" size={20} color={theme.tint} />
               </View>
               <View style={styles.routePlannerTitleGroup}>
-                <Text style={[styles.routePlannerTitle, { color: palette.textStrong }]}>Plan a route</Text>
+              <Text style={[styles.routePlannerTitle, { color: palette.textStrong }]}>Plan Your Route</Text>
                 <Text style={[styles.routePlannerSubtitle, { color: palette.textSubtle }]} numberOfLines={1}>
-                  {routePolyline.length > 1 ? `${routePolyline.length} route points · ${startQuery} to ${endQuery}` : 'Choose a start and destination'}
+                  {plannedRoutePolyline.length > 1 ? `${startQuery} to ${endQuery}` : 'Choose your start and destination'}
                 </Text>
               </View>
             </View>
             <MaterialIcons name={isRoutePlannerExpanded ? 'expand-less' : 'expand-more'} size={24} color={palette.textSubtle} />
           </Pressable>
           {isRoutePlannerExpanded ? <View style={styles.routePlannerBody}>
-          <TextInput
-            value={startQuery}
-            onChangeText={setStartQuery}
-            placeholder="Start address"
-            style={[
-              styles.input,
-              {
-                backgroundColor: palette.inputBg,
-                borderColor: palette.inputBorder,
-                color: palette.textStrong,
-              },
-            ]}
-            placeholderTextColor={palette.textSubtle}
-          />
-          <TextInput
-            value={endQuery}
-            onChangeText={setEndQuery}
-            placeholder="Destination address"
-            style={[
-              styles.input,
-              {
-                backgroundColor: palette.inputBg,
-                borderColor: palette.inputBorder,
-                color: palette.textStrong,
-              },
-            ]}
-            placeholderTextColor={palette.textSubtle}
-          />
+          <View style={styles.routeInputGroup}>
+            <Text style={[styles.routeInputLabel, { color: palette.textStrong }]}>Starting point</Text>
+            <Pressable
+              style={[styles.locationField, { backgroundColor: palette.inputBg, borderColor: palette.inputBorder }]}
+              onPress={() => openRouteLocationPicker('start')}
+              accessibilityRole="button"
+              accessibilityLabel={`Starting point: ${startQuery || 'Choose a starting point'}`}>
+              <MaterialIcons name="my-location" size={19} color={theme.tint} />
+              <Text style={[styles.locationFieldText, { color: startQuery ? palette.textStrong : palette.textMuted }]} numberOfLines={1}>{startQuery || 'Choose a starting point'}</Text>
+              <MaterialIcons name="search" size={19} color={palette.textMuted} />
+            </Pressable>
+          </View>
+          <Pressable
+            style={[styles.swapButton, { borderColor: palette.cardBorder }]}
+            onPress={swapRouteLocations}
+            disabled={isGeocoding}
+            accessibilityRole="button"
+            accessibilityLabel="Swap starting point and destination">
+            <MaterialIcons name="swap-vert" size={18} color={theme.tint} />
+            <Text style={[styles.swapButtonText, { color: theme.tint }]}>Swap Locations</Text>
+          </Pressable>
+          <View style={styles.routeInputGroup}>
+            <Text style={[styles.routeInputLabel, { color: palette.textStrong }]}>Destination</Text>
+            <Pressable
+              style={[styles.locationField, { backgroundColor: palette.inputBg, borderColor: palette.inputBorder }]}
+              onPress={() => openRouteLocationPicker('destination')}
+              accessibilityRole="button"
+              accessibilityLabel={`Destination: ${endQuery || 'Choose a destination'}`}>
+              <MaterialIcons name="place" size={19} color="#dc2626" />
+              <Text style={[styles.locationFieldText, { color: endQuery ? palette.textStrong : palette.textMuted }]} numberOfLines={1}>{endQuery || 'Search for an address'}</Text>
+              <MaterialIcons name="search" size={19} color={palette.textMuted} />
+            </Pressable>
+          </View>
           <Pressable
             style={[
-              styles.secondaryButton,
-              { backgroundColor: isDark ? '#1f2937' : '#e2e8f0' },
+              styles.planRouteButton,
+              { backgroundColor: isGeocoding ? '#94a3b8' : theme.tint },
               isGeocoding ? styles.primaryButtonDisabled : undefined,
             ]}
-            onPress={handleBuildTypedRoute}
+            onPress={handlePlanRoute}
             disabled={isGeocoding}
           >
             <View style={styles.routeButtonContent}>
               <MaterialIcons
-                name={routePolyline.length ? 'check-circle' : 'alt-route'}
+                name={plannedRoutePolyline.length ? 'check-circle' : 'alt-route'}
                 size={18}
-                color={routePolyline.length ? '#16a34a' : palette.textStrong}
+                color="#fff"
               />
-              <Text style={[styles.secondaryButtonText, { color: palette.textStrong }]}>
-                {isGeocoding ? 'Finding route…' : routePolyline.length ? 'Route ready' : 'Build route'}
+              <Text style={styles.planRouteButtonText}>
+                {isGeocoding ? 'Planning route…' : 'Plan Route'}
               </Text>
             </View>
           </Pressable>
-          <Pressable style={styles.ghostButton} onPress={handleResetToFallback}>
+          {plannedRoutePolyline.length > 1 ? (
+          <View style={[styles.routeEstimate, { backgroundColor: palette.screenBg, borderColor: palette.cardBorder }]}>
+              <View style={styles.routeEstimateMetric}>
+                <Text style={[styles.metricLabel, { color: palette.textMuted }]}>Distance</Text>
+                <Text style={[styles.metricValue, { color: palette.textStrong }]}>{plannedRouteDistanceMeters == null ? 'Unavailable' : formatRouteDistance(plannedRouteDistanceMeters)}</Text>
+              </View>
+              <View style={styles.routeEstimateMetric}>
+                <Text style={[styles.metricLabel, { color: palette.textMuted }]}>Estimated travel time</Text>
+                <Text style={[styles.metricValue, { color: palette.textStrong }]}>{plannedRouteDurationSeconds == null ? 'Unavailable' : formatRouteDuration(plannedRouteDurationSeconds)}</Text>
+              </View>
+              <Text style={[styles.routeEstimateNote, { color: palette.textMuted }]}>A personal route preview only. It does not change the school bus route or assigned stops.</Text>
+            </View>
+          ) : null}
+          <Pressable style={styles.ghostButton} onPress={handleClearRoutePlan}>
             <Text style={[styles.ghostButtonText, { color: palette.ghostText }]}>
-              {routePolyline.length ? 'Clear route' : 'Reset to default route'}
+              {plannedRoutePolyline.length ? 'Clear route plan' : 'Clear selected locations'}
             </Text>
           </Pressable>
           </View> : null}
-        </View>
+      </View>
         {isRouting ? (
           <View style={styles.infoRow}>
             <Text style={styles.infoIcon}>🧭</Text>
@@ -1330,7 +1442,6 @@ export default function TrackScreen() {
         ) : null}
 
         {role === 'driver' ? <Text style={[styles.infoText, { color: palette.textMuted }]}>Use the Driver tab to start a trip; it shares the device’s live GPS instead of simulating a route.</Text> : null}
-      </View>
       <View style={[styles.safetyCard, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
         <View style={styles.safetyHeader}>
           <View style={[styles.statusDot, { backgroundColor: safetyTracking ? '#16a34a' : '#d97706' }]} />
@@ -1373,6 +1484,21 @@ function formatAge(timestamp: number): string {
   if (diffMin < 60) return `${diffMin}m ago`;
   const diffHr = Math.floor(diffMin / 60);
   return `${diffHr}h ago`;
+}
+
+function formatRouteDistance(distanceMeters: number): string {
+  if (!Number.isFinite(distanceMeters) || distanceMeters < 0) return 'Unavailable';
+  if (distanceMeters < 1000) return `${Math.round(distanceMeters)} m`;
+  return `${(distanceMeters / 1000).toFixed(1)} km`;
+}
+
+function formatRouteDuration(durationSeconds: number): string {
+  if (!Number.isFinite(durationSeconds) || durationSeconds < 0) return 'Unavailable';
+  const totalMinutes = Math.max(1, Math.round(durationSeconds / 60));
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (!hours) return `About ${totalMinutes} min`;
+  return minutes ? `About ${hours} hr ${minutes} min` : `About ${hours} hr`;
 }
 
 function SkeletonBlock({
@@ -1613,9 +1739,10 @@ const styles = StyleSheet.create({
   },
   infoCard: {
     backgroundColor: '#fff',
-    borderRadius: 24,
-    padding: 24,
-    gap: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 18,
+    gap: 16,
     shadowColor: '#000',
     shadowOpacity: 0.08,
     shadowRadius: 12,
@@ -1623,12 +1750,21 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   infoTitle: {
-    fontSize: 20,
+    fontSize: 19,
     fontWeight: '700',
     color: '#0f172a',
     lineHeight: 26,
     letterSpacing: -0.2,
   },
+  trackingHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  statusBadge: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  statusBadgeText: { fontSize: 13, fontWeight: '700', textTransform: 'capitalize' },
+  speedBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, backgroundColor: '#eff6ff' },
+  speedBadgeText: { fontSize: 13, fontWeight: '700' },
+  trackingGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  trackingMetric: { flexBasis: '48%', flexGrow: 1, minWidth: 125, minHeight: 68, justifyContent: 'center', gap: 4, borderRadius: 12, paddingHorizontal: 11, paddingVertical: 9 },
+  metricLabel: { fontSize: 11, fontWeight: '600' },
+  metricValue: { fontSize: 13, fontWeight: '700' },
   infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1683,8 +1819,11 @@ const styles = StyleSheet.create({
   },
   routeForm: {
     marginTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: 12,
+  },
+  routePlannerCard: {
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 14,
   },
   routePlannerHeader: {
     minHeight: 58,
@@ -1711,7 +1850,7 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   routePlannerTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '700',
   },
   routePlannerSubtitle: {
@@ -1721,6 +1860,34 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     gap: 10,
   },
+  routeInputGroup: { gap: 6 },
+  routeInputLabel: { fontSize: 13, fontWeight: '600' },
+  locationField: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderRadius: 13, paddingHorizontal: 13 },
+  locationFieldText: { flex: 1, fontSize: 15, fontWeight: '500' },
+  swapButton: { minHeight: 42, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 22, paddingHorizontal: 14 },
+  swapButtonText: { fontSize: 13, fontWeight: '700' },
+  planRouteButton: { minHeight: 50, marginTop: 4, borderRadius: 13, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16 },
+  planRouteButtonText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  routeEstimate: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, padding: 12, borderWidth: 1, borderRadius: 13 },
+  routeEstimateMetric: { flex: 1, minWidth: 120, gap: 4 },
+  routeEstimateNote: { width: '100%', fontSize: 12, lineHeight: 17 },
+  routePickerModal: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15, 23, 42, 0.45)' },
+  routePickerKeyboard: { justifyContent: 'flex-end' },
+  routePickerSheet: { maxHeight: '90%', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 28, borderTopLeftRadius: 24, borderTopRightRadius: 24, gap: 14 },
+  routePickerHandle: { width: 42, height: 4, borderRadius: 2, backgroundColor: '#94a3b8', alignSelf: 'center', marginBottom: 2 },
+  routePickerHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  routePickerTitle: { fontSize: 19, fontWeight: '700' },
+  routePickerSubtitle: { fontSize: 13 },
+  routePickerClose: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f1f5f9' },
+  locationChoice: { minHeight: 68, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 9 },
+  locationChoiceIcon: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 13 },
+  locationChoiceText: { flex: 1, gap: 3 },
+  locationChoiceTitle: { fontSize: 14, fontWeight: '700' },
+  locationChoiceSubtitle: { fontSize: 12 },
+  routePickerFootnote: { fontSize: 12, lineHeight: 17 },
+  mapPickerPrompt: { position: 'absolute', zIndex: 6, top: 12, left: 12, right: 76, minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 13, borderWidth: 1, elevation: 4 },
+  mapPickerPromptText: { flex: 1, fontSize: 13, fontWeight: '600' },
+  mapPickerCancel: { fontSize: 13, fontWeight: '700', padding: 6 },
   input: {
     borderWidth: 1,
     borderColor: '#d0d5dd',
@@ -1836,4 +2003,9 @@ const styles = StyleSheet.create({
   permissionBanner: { padding: 12, borderRadius: 10, backgroundColor: '#fef3c7', gap: 6 },
   permissionText: { fontSize: 14, color: '#78350f' },
   settingsLink: { fontSize: 14, color: '#1d4ed8', fontWeight: '700', textDecorationLine: 'underline' },
+  fullscreenStatus: { position: 'absolute', left: 12, right: 12, bottom: 128, paddingHorizontal: 13, paddingVertical: 10, borderRadius: 14, borderWidth: 1, gap: 4 },
+  fullscreenStatusTop: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  fullscreenStatusTitle: { flex: 1, fontSize: 14, fontWeight: '700', textTransform: 'capitalize' },
+  fullscreenStatusDetails: { fontSize: 12 },
+  showFullscreenStatus: { position: 'absolute', left: 14, bottom: 130, width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', elevation: 3 },
 });

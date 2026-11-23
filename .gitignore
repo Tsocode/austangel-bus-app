@@ -30,6 +30,9 @@ firebase-debug.*.log
 firestore-debug.log
 database-debug.log
 android/app/debug.keystore
+docs/testing/test-accounts.local.csv
+docs/testing/test-accounts.local.md
+scripts/seed-local-test-users.local.cjs
 
 # macOS
 .DS_Store

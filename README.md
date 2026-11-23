@@ -23,6 +23,7 @@ Live school GPS is sent while Driver Tools is open and a trip is active. Backgro
 
 - [Setup and local emulators](docs/SETUP.md)
 - [Feature behavior and limits](docs/FEATURES.md)
+- [Austangel User Guide](docs/USER_GUIDE.md)
 - [Security configuration and known release work](docs/SECURITY.md)
 - [Travel payment setup](docs/TRAVEL_PAYMENTS.md)
 - [Privacy and data retention](PRIVACY_POLICY.md)
