@@ -41,8 +41,9 @@ let Marker: any = null;
 let MarkerAnimated: any = null;
 let Polyline: any = null;
 let GoogleMapsProvider: any = null;
+let FreeMap: any = null;
 
-if (shouldLoadMaps) {
+if (shouldLoadMaps && process.env.EXPO_PUBLIC_MAPS_PROVIDER === 'google') {
   try {
     // eslint-disable-next-line global-require
     const mapsModule = require('react-native-maps');
@@ -59,12 +60,26 @@ if (shouldLoadMaps) {
     MapView = null;
   }
 }
+if (shouldLoadMaps && process.env.EXPO_PUBLIC_MAPS_PROVIDER !== 'google') {
+  try {
+    // eslint-disable-next-line global-require
+    FreeMap = require('@/components/maps/FreeMap').default;
+  } catch (e) {
+    console.warn('Could not load the native free map renderer:', e);
+  }
+}
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SettingsButton } from '@/components/ui/SettingsButton';
 import { LocationAutocomplete, PlaceResult } from '@/components/LocationAutocomplete';
 import { Colors } from '@/constants/Colors';
 import { Layout } from '@/constants/Layout';
+import {
+  GOOGLE_MAPS_ANDROID_API_KEY,
+  GOOGLE_MAPS_IOS_API_KEY,
+  GOOGLE_MAPS_LEGACY_API_KEY,
+  USE_GOOGLE_MAPS,
+} from '@/constants/mapProvider';
 import { BANANA_TO_AKUTE_ROUTE_POINTS, DEFAULT_LOCATION, DEFAULT_ROUTE_POINTS } from '@/constants/geo';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { Bus } from '@/models/bus';
@@ -74,6 +89,7 @@ import { getBus, listBuses, listBusesForParent, listBusesForSchoolStaff, updateB
 import { getRoute } from '@/services/firestore/routes';
 import { LiveLocation, subscribeToLiveLocation, updateLiveLocation } from '@/services/realtime/locations';
 import { realtimeDb } from '@/services/firebase';
+import { searchOpenMapPlaces } from '@/services/maps/openMapGeocoding';
 
 type Coordinate = { latitude: number; longitude: number };
 
@@ -195,7 +211,7 @@ const FALLBACK_ROUTES: Record<string, Route> = {
 };
 
 export default function TrackScreen() {
-  const { role, profile } = useAuthContext();
+  const { role, profile, firebaseUser } = useAuthContext();
   const colorScheme = useColorScheme() ?? 'light';
   const isDark = colorScheme === 'dark';
   const theme = Colors[colorScheme];
@@ -233,6 +249,7 @@ export default function TrackScreen() {
   const [endCoord, setEndCoord] = useState<Coordinate | null>(null);
   const [isRouting, setIsRouting] = useState(false);
   const [isGeocoding, setIsGeocoding] = useState(false);
+  const [isRoutePlannerExpanded, setIsRoutePlannerExpanded] = useState(false);
   const [currentStop, setCurrentStop] = useState<RouteStop | null>(null);
   const [pauseUntil, setPauseUntil] = useState<number | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -247,7 +264,8 @@ export default function TrackScreen() {
   const [safetyLocation, setSafetyLocation] = useState<Location.LocationObject | null>(null);
   const [safetyRefreshing, setSafetyRefreshing] = useState(false);
   const safetyWatcher = useRef<Location.LocationSubscription | null>(null);
-  const safetyTripId = profile?.id ?? selectedBusId ?? 'guest';
+  // Realtime Database rules scope this node to auth.uid; never fall back to a bus or guest ID.
+  const safetyTripId = firebaseUser?.uid ?? '';
   const mapRef = useRef<MapViewInstance | null>(null);
   const simulationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const simulationStep = useRef(0);
@@ -256,13 +274,15 @@ export default function TrackScreen() {
   const visitedStopsRef = useRef<Set<number>>(new Set());
   const isSimulatingRef = useRef(false);
   const segmentDurationsRef = useRef<number[]>([]);
-  const busCoordinate = useRef(
-    new AnimatedRegion({
-      latitude: DEFAULT_LOCATION.latitude,
-      longitude: DEFAULT_LOCATION.longitude,
-      latitudeDelta: 0,
-      longitudeDelta: 0,
-    })
+  const busCoordinate = useRef<any>(
+    AnimatedRegion
+      ? new AnimatedRegion({
+          latitude: DEFAULT_LOCATION.latitude,
+          longitude: DEFAULT_LOCATION.longitude,
+          latitudeDelta: 0,
+          longitudeDelta: 0,
+        })
+      : { setValue: () => undefined }
   );
 
   const selectedBus = useMemo(
@@ -498,23 +518,9 @@ export default function TrackScreen() {
     if (match) {
       return { latitude: Number(match[1]), longitude: Number(match[2]) };
     }
-    const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(
-      trimmed
-    )}`;
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error('Geocoding failed');
-    }
-    let data: Array<{ lat: string; lon: string }>;
-    try {
-      data = (await response.json()) as Array<{ lat: string; lon: string }>;
-    } catch (error) {
-      throw new Error('Geocoding response invalid');
-    }
-    if (!data.length) {
-      throw new Error('No results');
-    }
-    return { latitude: Number(data[0].lat), longitude: Number(data[0].lon) };
+    const results = await searchOpenMapPlaces(trimmed, 1);
+    if (!results.length) throw new Error('No results');
+    return { latitude: results[0].latitude, longitude: results[0].longitude };
   };
 
   const fallbackLookup = (query: string): Coordinate | null => {
@@ -661,17 +667,22 @@ export default function TrackScreen() {
   };
 
   const publishSafetyPosition = async (position: Location.LocationObject) => {
+    if (!safetyTripId) throw new Error('Sign in before sharing your trip location.');
     setSafetyLocation(position);
+    const { speed, heading, accuracy } = position.coords;
     await set(ref(realtimeDb, `activeTravelTrips/${safetyTripId}`), {
-      tripId: safetyTripId, userId: profile?.id ?? null, active: true,
+      tripId: safetyTripId, userId: safetyTripId, active: true,
       latitude: position.coords.latitude, longitude: position.coords.longitude,
-      speed: position.coords.speed, heading: position.coords.heading,
-      accuracy: position.coords.accuracy, timestamp: position.timestamp,
-      destination: endCoord ? { ...endCoord, address: endQuery } : null,
+      ...(typeof speed === 'number' && speed >= 0 ? { speed } : {}),
+      ...(typeof heading === 'number' && heading >= 0 && heading <= 360 ? { heading } : {}),
+      ...(typeof accuracy === 'number' && accuracy >= 0 ? { accuracy } : {}),
+      timestamp: position.timestamp,
+      ...(endCoord ? { destination: { ...endCoord, address: endQuery } } : {}),
     });
   };
   const startSafetyTracking = async () => {
     try {
+      if (!safetyTripId) throw new Error('Sign in before sharing your trip location.');
       const permission = await Location.requestForegroundPermissionsAsync();
       if (!permission.granted) { setLocationDenied(true); return; }
       setLocationDenied(false);
@@ -686,12 +697,14 @@ export default function TrackScreen() {
   };
   const stopSafetyTracking = async () => {
     safetyWatcher.current?.remove(); safetyWatcher.current = null; setSafetyTracking(false);
+    if (!safetyTripId) return;
     try { await update(ref(realtimeDb, `activeTravelTrips/${safetyTripId}`), { active: false, stoppedAt: Date.now() }); }
     catch (error) { console.warn('Could not mark safety trip stopped', error); }
   };
   const refreshSafetyLocation = async () => {
     setSafetyRefreshing(true);
     try {
+      if (!safetyTripId) throw new Error('Sign in before refreshing trip location.');
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       setSafetyLocation(position);
       const snapshot = await get(ref(realtimeDb, `activeTravelTrips/${safetyTripId}`));
@@ -703,7 +716,19 @@ export default function TrackScreen() {
   useEffect(() => () => { safetyWatcher.current?.remove(); }, []);
   const sendSos = () => Alert.alert('Emergency alert', 'Send an SOS alert to your trip contacts?', [
     { text: 'Cancel', style: 'cancel' }, { text: 'Send SOS', style: 'destructive', onPress: () => {
-      void set(ref(realtimeDb, `activeTravelTrips/${safetyTripId}/sos`), { active: true, timestamp: Date.now(), latitude: safetyLocation?.coords.latitude ?? null, longitude: safetyLocation?.coords.longitude ?? null }).then(() => Alert.alert('SOS sent', 'Your trip alert was recorded.')).catch(() => Alert.alert('SOS unavailable', 'The alert could not be recorded.'));
+      if (!safetyTripId) {
+        Alert.alert('Sign in required', 'Sign in before sending an emergency alert.');
+        return;
+      }
+      const coordinates = safetyLocation ? {
+        latitude: safetyLocation.coords.latitude,
+        longitude: safetyLocation.coords.longitude,
+      } : {};
+      void set(ref(realtimeDb, `activeTravelTrips/${safetyTripId}/sos`), {
+        active: true,
+        timestamp: Date.now(),
+        ...coordinates,
+      }).then(() => Alert.alert('SOS sent', 'Your trip alert was recorded.')).catch(() => Alert.alert('SOS unavailable', 'The alert could not be recorded.'));
     } },
   ]);
 
@@ -816,17 +841,56 @@ export default function TrackScreen() {
   }
 
   const renderMapView = (style: StyleProp<ViewStyle>) => {
-    if (!MapView) {
+    if (!USE_GOOGLE_MAPS && FreeMap) {
+      const points = [
+        ...(startCoord ? [{ id: 'start', coordinate: startCoord, title: 'Start', color: '#16a34a' }] : []),
+        ...(endCoord ? [{ id: 'destination', coordinate: endCoord, title: 'Destination', color: '#dc2626' }] : []),
+        ...routePoints.map((stop) => ({
+          id: stop.id,
+          coordinate: { latitude: stop.latitude, longitude: stop.longitude },
+          title: stop.name,
+          color: '#d97706',
+        })),
+        ...(liveLocation ? [{
+          id: 'live-bus',
+          coordinate: { latitude: liveLocation.latitude, longitude: liveLocation.longitude },
+          title: selectedBus?.nickname ?? 'Bus',
+          color: isStale ? '#64748b' : '#1d4ed8',
+        }] : []),
+      ];
+      return (
+        <FreeMap
+          ref={mapRef}
+          style={style}
+          center={currentLocation}
+          zoomDelta={zoomDelta.longitudeDelta}
+          points={points}
+          lines={[
+            { id: 'route', coordinates: routePolyline, color: '#93c5fd', width: 5 },
+            { id: 'live-trail', coordinates: trailCoords, color: '#2563eb', width: 6 },
+          ]}
+          onPanDrag={() => setFollowBus(false)}
+          onMapReady={() => {
+            if (routePolyline.length > 1) {
+              mapRef.current?.fitToCoordinates(routePolyline, {
+                edgePadding: { top: 80, right: 60, bottom: 120, left: 60 },
+                animated: false,
+              });
+            }
+          }}
+        />
+      );
+    }
+
+    if (USE_GOOGLE_MAPS ? !MapView : !FreeMap) {
       return (
         <View style={[style, { backgroundColor: '#f5f5f5', justifyContent: 'center', alignItems: 'center', padding: 20 }]}>
           <MaterialIcons name="location-on" size={48} color="#2563eb" style={{ marginBottom: 16 }} />
           <Text style={{ fontSize: 16, fontWeight: '600', color: '#1f2937', marginBottom: 8, textAlign: 'center' }}>
-            Bus Tracking on Web
+            Map renderer unavailable
           </Text>
           <Text style={{ fontSize: 14, color: '#6b7280', textAlign: 'center', lineHeight: 20 }}>
-            Real-time map tracking works best on iOS and Android.{'\n\n'}
-            On web, use the driver tools and check-in features below.{'\n\n'}
-            For full tracking: Use Expo Go or build a development app.
+            Install a native development build with the configured map provider, then reopen tracking.
           </Text>
         </View>
       );
@@ -836,10 +900,25 @@ export default function TrackScreen() {
       <MapView
         ref={mapRef}
         style={style}
+        onMapReady={() => {
+          if (routePolyline.length > 1) {
+            mapRef.current?.fitToCoordinates(routePolyline, {
+              edgePadding: { top: 80, right: 60, bottom: 120, left: 60 },
+              animated: false,
+            });
+          } else {
+            mapRef.current?.animateToRegion({
+              latitude: currentLocation.latitude,
+              longitude: currentLocation.longitude,
+              latitudeDelta: zoomDelta.latitudeDelta,
+              longitudeDelta: zoomDelta.longitudeDelta,
+            }, 0);
+          }
+        }}
         onPanDrag={() => setFollowBus(false)}
         provider={(Platform.OS === 'ios'
-          ? process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
-          : process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY)
+          ? GOOGLE_MAPS_IOS_API_KEY || GOOGLE_MAPS_LEGACY_API_KEY
+          : GOOGLE_MAPS_ANDROID_API_KEY || GOOGLE_MAPS_LEGACY_API_KEY)
           ? GoogleMapsProvider
           : undefined}
         initialRegion={{
@@ -1165,8 +1244,27 @@ export default function TrackScreen() {
           </Text>
         </View>
 
-        <View style={styles.routeForm}>
-          <Text style={[styles.sectionLabel, { color: palette.textStrong }]}>Plan route</Text>
+        <View style={[styles.routeForm, { borderColor: palette.cardBorder }]}>
+          <Pressable
+            style={styles.routePlannerHeader}
+            onPress={() => setIsRoutePlannerExpanded((expanded) => !expanded)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: isRoutePlannerExpanded }}
+            accessibilityLabel={isRoutePlannerExpanded ? 'Hide route planner' : 'Show route planner'}>
+            <View style={styles.routePlannerHeading}>
+              <View style={[styles.routePlannerIcon, { backgroundColor: isDark ? '#1e3a8a' : '#dbeafe' }]}>
+                <MaterialIcons name="alt-route" size={20} color={theme.tint} />
+              </View>
+              <View style={styles.routePlannerTitleGroup}>
+                <Text style={[styles.routePlannerTitle, { color: palette.textStrong }]}>Plan a route</Text>
+                <Text style={[styles.routePlannerSubtitle, { color: palette.textSubtle }]} numberOfLines={1}>
+                  {routePolyline.length > 1 ? `${routePolyline.length} route points · ${startQuery} to ${endQuery}` : 'Choose a start and destination'}
+                </Text>
+              </View>
+            </View>
+            <MaterialIcons name={isRoutePlannerExpanded ? 'expand-less' : 'expand-more'} size={24} color={palette.textSubtle} />
+          </Pressable>
+          {isRoutePlannerExpanded ? <View style={styles.routePlannerBody}>
           <TextInput
             value={startQuery}
             onChangeText={setStartQuery}
@@ -1220,6 +1318,7 @@ export default function TrackScreen() {
               {routePolyline.length ? 'Clear route' : 'Reset to default route'}
             </Text>
           </Pressable>
+          </View> : null}
         </View>
         {isRouting ? (
           <View style={styles.infoRow}>
@@ -1583,7 +1682,43 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   routeForm: {
-    marginTop: 8,
+    marginTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 12,
+  },
+  routePlannerHeader: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  routePlannerHeading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  routePlannerIcon: {
+    height: 40,
+    width: 40,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  routePlannerTitleGroup: {
+    flex: 1,
+    gap: 3,
+  },
+  routePlannerTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  routePlannerSubtitle: {
+    fontSize: 12,
+  },
+  routePlannerBody: {
+    paddingTop: 10,
     gap: 10,
   },
   input: {

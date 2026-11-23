@@ -13,7 +13,7 @@ These statements describe intended code/configuration behavior and are not a cer
 ## Required before public release
 
 - Review Firestore and Realtime Database rules with representative role and assignment cases, including denied access. The current rules were validated by loading them in the local emulator, but complete authorization tests and independent review remain outstanding.
-- Restrict the Google Maps key by Android application ID and allowed Maps SDK APIs. Avoid embedding server-side Google credentials in the app.
+- The default MapLibre/OpenFreeMap build does not use or embed Google Maps keys. iOS Expo Go previews use the bundled Apple Maps renderer. If `EXPO_PUBLIC_MAPS_PROVIDER=google` is enabled later, restrict each Google Maps key by its application/web origin and allowed Maps APIs; never embed server-side Google credentials in the app.
 - Use separate development and production Firebase projects. Do not run local app tests against production data.
 - Configure App Check and monitor Firebase Auth/Functions access as appropriate for the deployment.
 - Decide and implement data retention, account deletion, backup expiration, incident handling, and access-request workflows.

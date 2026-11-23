@@ -15,7 +15,7 @@ Live school GPS is sent while Driver Tools is open and a trip is active. Backgro
 ## Development setup
 
 1. Install the supported Node.js version and dependencies: `npm install`.
-2. Create a local `.env` file from `.env.example` and fill in Firebase configuration. Add `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` if you want the Android native map to use your Google Maps key.
+2. Create a local `.env` file from `.env.example` and fill in Firebase configuration. Installed builds use MapLibre with OpenFreeMap/OpenStreetMap by default. Expo Go previews use the bundled native map on iOS. To restore Google Maps later, set `EXPO_PUBLIC_MAPS_PROVIDER=google` and provide platform-restricted keys.
 3. Follow [docs/SETUP.md](docs/SETUP.md) for Firebase Emulator Suite and device setup.
 4. Start the app with `npm start`; use `npm run android`, `npm run ios` (macOS), or `npm run web` as needed.
 

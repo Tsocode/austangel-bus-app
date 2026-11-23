@@ -15,6 +15,13 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { LocationAutocomplete, PlaceResult } from '@/components/LocationAutocomplete';
+import {
+  GOOGLE_MAPS_ANDROID_API_KEY,
+  GOOGLE_MAPS_IOS_API_KEY,
+  GOOGLE_MAPS_LEGACY_API_KEY,
+  GOOGLE_MAPS_WEB_API_KEY,
+  USE_GOOGLE_MAPS,
+} from '@/constants/mapProvider';
 
 let NativeMap: any = null;
 let NativeMarker: any = null;
@@ -22,9 +29,13 @@ let NativePolyline: any = null;
 let NativeGoogleMapsProvider: any = null;
 if (Platform.OS !== 'web') {
   try {
-    const maps = require('react-native-maps');
-    NativeMap = maps.default; NativeMarker = maps.Marker; NativePolyline = maps.Polyline;
-    NativeGoogleMapsProvider = maps.PROVIDER_GOOGLE;
+    if (USE_GOOGLE_MAPS) {
+      const maps = require('react-native-maps');
+      NativeMap = maps.default; NativeMarker = maps.Marker; NativePolyline = maps.Polyline;
+      NativeGoogleMapsProvider = maps.PROVIDER_GOOGLE;
+    } else {
+      NativeMap = require('@/components/maps/FreeMap').default;
+    }
   } catch (error) {
     NativeMap = null;
     console.error('Travel map module failed to load:', error);
@@ -266,7 +277,7 @@ export default function MonitorTripScreen() {
   } : null);
   const webMapCenter = mapDestination ?? { latitude: 6.5244, longitude: 3.3792 };
   const webMapBox = `${webMapCenter.longitude - 0.03},${webMapCenter.latitude - 0.02},${webMapCenter.longitude + 0.03},${webMapCenter.latitude + 0.02}`;
-  const googleWebKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
+  const googleWebKey = GOOGLE_MAPS_WEB_API_KEY;
   const webMapUrl = googleWebKey
     ? `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(googleWebKey)}&q=${encodeURIComponent(`${webMapCenter.latitude},${webMapCenter.longitude}`)}`
     : `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(webMapBox)}&layer=mapnik&marker=${webMapCenter.latitude},${webMapCenter.longitude}`;
@@ -312,10 +323,33 @@ export default function MonitorTripScreen() {
           title: 'Live travel trip map',
           src: webMapUrl,
           style: { width: '100%', height: '100%', border: 0 }, loading: 'lazy',
-        }) : NativeMap && (vehicleLocation || mapDestination) ? <><NativeMap ref={mapRef} style={styles.map}
-          provider={((Platform.OS === 'ios' && process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY) ||
-            (Platform.OS === 'android' && process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY) ||
-            process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY) ? NativeGoogleMapsProvider : undefined}
+        }) : !USE_GOOGLE_MAPS && NativeMap && (vehicleLocation || mapDestination) ? <><NativeMap
+          ref={mapRef}
+          style={styles.map}
+          center={vehicleLocation ?? mapDestination}
+          zoomDelta={0.04}
+          points={[
+            ...(vehicleLocation ? [{ id: 'vehicle', coordinate: vehicleLocation, title: 'Live vehicle', color: theme.tint }] : []),
+            ...(mapDestination ? [{ id: 'destination', coordinate: mapDestination, title: mapDestination.title, color: '#dc2626' }] : []),
+          ]}
+          lines={vehicleLocation && mapDestination ? [{
+            id: 'trip',
+            coordinates: [vehicleLocation, mapDestination],
+            color: '#2563eb',
+            width: 4,
+          }] : []}
+          onPanDrag={() => setFollowLiveMap(false)}
+          onMapReady={() => {
+            if (vehicleLocation && mapDestination) mapRef.current?.fitToCoordinates([vehicleLocation, mapDestination], {
+              edgePadding: { top: 35, right: 35, bottom: 35, left: 35 }, animated: false,
+            });
+          }}
+        /><TouchableOpacity onPress={() => {
+          setFollowLiveMap(true);
+          if (vehicleLocation) mapRef.current?.animateToRegion({ latitude: vehicleLocation.latitude, longitude: vehicleLocation.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 }, 350);
+        }} style={[styles.followControl, { backgroundColor: theme.surface, borderColor: theme.border }]}><MaterialIcons name="my-location" size={17} color={theme.tint} /><Text style={[styles.followText, { color: theme.text }]}>{followLiveMap ? 'Following trip' : 'Follow trip'}</Text></TouchableOpacity></> : USE_GOOGLE_MAPS && NativeMap && (vehicleLocation || mapDestination) ? <><NativeMap ref={mapRef} style={styles.map}
+          provider={((Platform.OS === 'ios' && (GOOGLE_MAPS_IOS_API_KEY || GOOGLE_MAPS_LEGACY_API_KEY)) ||
+            (Platform.OS === 'android' && (GOOGLE_MAPS_ANDROID_API_KEY || GOOGLE_MAPS_LEGACY_API_KEY))) ? NativeGoogleMapsProvider : undefined}
           initialRegion={{
           latitude: vehicleLocation?.latitude ?? mapDestination!.latitude, longitude: vehicleLocation?.longitude ?? mapDestination!.longitude,
           latitudeDelta: 0.04, longitudeDelta: 0.04,

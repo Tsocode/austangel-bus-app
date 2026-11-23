@@ -27,48 +27,65 @@ service cloud.firestore {
       return signedIn() && exists(userPath(request.auth.uid));
     }
     function profile() { return get(userPath(request.auth.uid)).data; }
+    function fieldIs(data, field, value) {
+      return field in data && data[field] is string && data[field] == value;
+    }
     function profileHas(field) {
-      return hasProfile() && profile().keys().hasAny([field]);
+      return hasProfile() && field in profile();
     }
     function profileRoleIs(value) {
-      return profileHas('role') && profile().role is string && profile().role == value;
+      return hasProfile() && fieldIs(profile(), 'role', value);
     }
     function profileTravelRoleIs(value) {
-      return profileHas('travelRole') && profile().travelRole is string && profile().travelRole == value;
+      return hasProfile() && fieldIs(profile(), 'travelRole', value);
     }
     function profileServiceIs(value) {
-      return profileHas('primaryService') && profile().primaryService is string &&
-        profile().primaryService == value;
+      return hasProfile() && fieldIs(profile(), 'primaryService', value);
+    }
+    function unchangedOptionalField(before, after, field) {
+      return ((field in before) == (field in after)) &&
+        (!(field in before) || after[field] == before[field]);
     }
     function roleIs(value) { return profileRoleIs(value); }
     // Admin authorization comes from a server-issued Firebase custom claim.
     // The profile role is display data and is never sufficient by itself.
     function isAdmin() {
-      return signedIn() && request.auth.token.role == 'admin';
+      return signedIn() && 'role' in request.auth.token && request.auth.token.role == 'admin';
+    }
+    function schoolDriverProfile(data) {
+      return (fieldIs(data, 'schoolRole', 'driver') || fieldIs(data, 'role', 'driver')) &&
+        (!('primaryService' in data) || data.primaryService != 'travel');
     }
     function isSchoolDriver() {
-      return hasProfile() &&
-        ((profileHas('schoolRole') && profile().schoolRole is string && profile().schoolRole == 'driver') ||
-         profileRoleIs('driver')) &&
-        (!profileHas('primaryService') || profile().primaryService != 'travel');
+      return hasProfile() && schoolDriverProfile(profile());
     }
     function isSchoolAttendant() { return roleIs('attendant'); }
     function isSchoolParent() { return roleIs('parent'); }
+    function travelPassengerProfile(data) {
+      return fieldIs(data, 'travelRole', 'passenger') ||
+        (fieldIs(data, 'role', 'passenger') && fieldIs(data, 'primaryService', 'travel'));
+    }
     function isTravelPassenger() {
       // Service switching alone must not turn a driver or school user into a passenger.
-      return hasProfile() &&
-        (profileTravelRoleIs('passenger') ||
-         (profileRoleIs('passenger') && profileServiceIs('travel')));
+      return hasProfile() && travelPassengerProfile(profile());
+    }
+    function travelDriverProfile(data) {
+      return fieldIs(data, 'travelRole', 'driver') ||
+        (fieldIs(data, 'role', 'driver') && fieldIs(data, 'primaryService', 'travel'));
     }
     function isTravelDriver() {
-      return hasProfile() && (profileTravelRoleIs('driver') ||
-        (profileRoleIs('driver') && profileServiceIs('travel')));
+      return hasProfile() && travelDriverProfile(profile());
+    }
+    function verifiedTravelDriverProfile(data) {
+      return travelDriverProfile(data) && fieldIs(data, 'verificationStatus', 'verified');
+    }
+    function verifiedDriverDocument(data) {
+      return fieldIs(data, 'verificationStatus', 'verified');
     }
     function isVerifiedTravelDriver() {
-      return isTravelDriver() && profileHas('verificationStatus') &&
-        profile().verificationStatus == 'verified' &&
+      return signedIn() && hasProfile() && verifiedTravelDriverProfile(profile()) &&
         exists(/databases/$(database)/documents/drivers/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/drivers/$(request.auth.uid)).data.verificationStatus == 'verified';
+        verifiedDriverDocument(get(/databases/$(database)/documents/drivers/$(request.auth.uid)).data);
     }
     function isString(value, max) { return value is string && value.size() <= max; }
     function optionalString(data, field, max) {
@@ -85,6 +102,8 @@ service cloud.firestore {
         data.primaryService in ['school','travel'] &&
         (!('schoolRole' in data) || data.schoolRole == null || data.schoolRole in ['parent','driver','attendant','admin']) &&
         (!('travelRole' in data) || data.travelRole == null || data.travelRole in ['passenger','driver']) &&
+        (!('verificationStatus' in data) || data.verificationStatus == null ||
+          data.verificationStatus in ['pending','verified','rejected']) &&
         optionalString(data,'schoolRole',30) && optionalString(data,'travelRole',30) &&
         optionalString(data,'firstName',80) && optionalString(data,'lastName',80) &&
         optionalString(data,'phoneNumber',40) && optionalString(data,'photoURL',2048) &&
@@ -175,13 +194,12 @@ service cloud.firestore {
     function isAssignedBusStaff(busId) {
       return signedIn() && busId is string &&
         exists(/databases/$(database)/documents/buses/$(busId)) &&
-        ((isSchoolDriver() &&
-          'driverId' in get(/databases/$(database)/documents/buses/$(busId)).data &&
-          get(/databases/$(database)/documents/buses/$(busId)).data.driverId == request.auth.uid) ||
-         (isSchoolAttendant() &&
-          'assignedAttendants' in get(/databases/$(database)/documents/buses/$(busId)).data &&
-          get(/databases/$(database)/documents/buses/$(busId)).data.assignedAttendants is list &&
-          request.auth.uid in get(/databases/$(database)/documents/buses/$(busId)).data.assignedAttendants));
+        assignedBusStaffDocument(get(/databases/$(database)/documents/buses/$(busId)).data);
+    }
+    function assignedBusStaffDocument(data) {
+      return (isSchoolDriver() && 'driverId' in data && data.driverId == request.auth.uid) ||
+        (isSchoolAttendant() && 'assignedAttendants' in data && data.assignedAttendants is list &&
+          request.auth.uid in data.assignedAttendants);
     }
     function childBusFieldMatches(child, busId) {
       return (('defaultBusId' in child) && child.defaultBusId == busId) ||
@@ -200,24 +218,60 @@ service cloud.firestore {
       return /databases/$(database)/documents/users/$(parentId)/children/$(childId);
     }
     function checkinChildAndBusMatch(data) {
-      return exists(childDocumentPath(data.parentId, data.childId)) &&
-        'guardianIds' in get(childDocumentPath(data.parentId, data.childId)).data &&
-        get(childDocumentPath(data.parentId, data.childId)).data.guardianIds is list &&
-        data.parentId in get(childDocumentPath(data.parentId, data.childId)).data.guardianIds &&
-        childBusFieldMatches(get(childDocumentPath(data.parentId, data.childId)).data, data.busId);
+      let childPath = childDocumentPath(data.parentId, data.childId);
+      return exists(childPath) && checkinChildMatchesDocument(data, get(childPath).data);
+    }
+    function checkinChildMatchesDocument(data, child) {
+      return 'guardianIds' in child && child.guardianIds is list &&
+        data.parentId in child.guardianIds && childBusFieldMatches(child, data.busId);
+    }
+    function parentCanReadCheckinChild(parentId, childId, userId) {
+      let childPath = childDocumentPath(parentId, childId);
+      return exists(childPath) && guardianIncludes(get(childPath).data, userId);
+    }
+    function guardianIncludes(child, userId) {
+      return 'guardianIds' in child && child.guardianIds is list && userId in child.guardianIds;
     }
     function checkinTripMatches(data) {
       let tripPath = /databases/$(database)/documents/trips/$(data.tripId);
       let busPath = /databases/$(database)/documents/buses/$(data.busId);
       return exists(tripPath) && exists(busPath) &&
-        'busId' in get(tripPath).data && 'status' in get(tripPath).data &&
-        'driverId' in get(tripPath).data && 'routeId' in get(tripPath).data &&
-        get(tripPath).data.busId == data.busId &&
-        get(tripPath).data.status == 'in_progress' &&
-        'driverId' in get(busPath).data && 'routeId' in get(busPath).data &&
-        get(tripPath).data.driverId == get(busPath).data.driverId &&
-        get(tripPath).data.routeId == get(busPath).data.routeId &&
-        (!isSchoolDriver() || get(tripPath).data.driverId == request.auth.uid);
+        checkinTripAndBusMatch(data, get(tripPath).data, get(busPath).data);
+    }
+    function checkinTripAndBusMatch(data, trip, bus) {
+      return 'busId' in trip && 'status' in trip && 'driverId' in trip && 'routeId' in trip &&
+        trip.busId == data.busId && trip.status == 'in_progress' &&
+        'driverId' in bus && 'routeId' in bus && trip.driverId == bus.driverId &&
+        trip.routeId == bus.routeId && (!isSchoolDriver() || trip.driverId == request.auth.uid);
+    }
+    function busHasParent(busId, userId) {
+      let busPath = /databases/$(database)/documents/buses/$(busId);
+      return exists(busPath) && busParentIncludes(get(busPath).data, userId);
+    }
+    function busParentIncludes(bus, userId) {
+      return 'parentIds' in bus && bus.parentIds is list && userId in bus.parentIds;
+    }
+    function busHasRoute(busId, routeId) {
+      let busPath = /databases/$(database)/documents/buses/$(busId);
+      return exists(busPath) && busRouteMatches(get(busPath).data, routeId);
+    }
+    function busRouteMatches(bus, routeId) {
+      return 'routeId' in bus && bus.routeId == routeId;
+    }
+    function tripIsInProgress(tripId) {
+      let tripPath = /databases/$(database)/documents/trips/$(tripId);
+      return exists(tripPath) && tripStatusIs(get(tripPath).data, 'in_progress');
+    }
+    function tripStatusIs(trip, status) {
+      return 'status' in trip && trip.status == status;
+    }
+    function travelTripHasParticipant(tripId, userId) {
+      let tripPath = /databases/$(database)/documents/travelTrips/$(tripId);
+      return exists(tripPath) && travelTripIncludesUser(get(tripPath).data, userId);
+    }
+    function travelTripIncludesUser(trip, userId) {
+      return ('passengerId' in trip && trip.passengerId == userId) ||
+        ('driverId' in trip && trip.driverId == userId);
     }
     function validCheckin(data) {
       return data.keys().hasOnly(['tripId','childId','parentId','busId','type','recordedBy','timestamp','latitude','longitude','note']) &&
@@ -255,9 +309,9 @@ service cloud.firestore {
       allow update: if signedIn() && request.auth.uid == uid && validUser(request.resource.data, uid) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'primaryService','firstName','lastName','displayName','phoneNumber','photoURL','updatedAt'
-        ]) && request.resource.data.role == resource.data.role &&
-        request.resource.data.schoolRole == resource.data.schoolRole &&
-        request.resource.data.travelRole == resource.data.travelRole;
+        ]) && unchangedOptionalField(resource.data, request.resource.data, 'role') &&
+        unchangedOptionalField(resource.data, request.resource.data, 'schoolRole') &&
+        unchangedOptionalField(resource.data, request.resource.data, 'travelRole');
       allow update: if isAdmin() && validUser(request.resource.data, uid);
       allow delete: if isAdmin();
 
@@ -320,8 +374,7 @@ service cloud.firestore {
       allow get: if isAdmin() ||
         (isSchoolParent() && 'parentIds' in resource.data && resource.data.parentIds is list && request.auth.uid in resource.data.parentIds) ||
         (profileHas('assignedBusId') && profile().assignedBusId is string &&
-          exists(/databases/$(database)/documents/buses/$(profile().assignedBusId)) &&
-          get(/databases/$(database)/documents/buses/$(profile().assignedBusId)).data.routeId == routeId);
+          busHasRoute(profile().assignedBusId, routeId));
       allow list: if isAdmin();
       allow create: if isAdmin() && validRoute(request.resource.data);
       allow update: if isAdmin() && validRoute(request.resource.data) &&
@@ -338,14 +391,10 @@ service cloud.firestore {
       allow get, list: if isAdmin() ||
         ('busId' in resource.data && isSchoolDriver() && isAssignedBusStaff(resource.data.busId)) ||
         ('busId' in resource.data && 'tripId' in resource.data && isSchoolAttendant() && isAssignedBusStaff(resource.data.busId) &&
-          exists(/databases/$(database)/documents/trips/$(resource.data.tripId)) &&
-          get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.status == 'in_progress') ||
+          tripIsInProgress(resource.data.tripId)) ||
         (isSchoolParent() && 'parentId' in resource.data && resource.data.parentId is string && 'childId' in resource.data &&
-          exists(childDocumentPath(resource.data.parentId, resource.data.childId)) &&
           (resource.data.parentId == request.auth.uid ||
-            ('guardianIds' in get(childDocumentPath(resource.data.parentId, resource.data.childId)).data &&
-             get(childDocumentPath(resource.data.parentId, resource.data.childId)).data.guardianIds is list &&
-             request.auth.uid in get(childDocumentPath(resource.data.parentId, resource.data.childId)).data.guardianIds)));
+            parentCanReadCheckinChild(resource.data.parentId, resource.data.childId, request.auth.uid)));
       allow update, delete: if isAdmin();
     }
 
@@ -368,10 +417,7 @@ service cloud.firestore {
         ('busId' in resource.data && isSchoolAttendant() && isAssignedBusStaff(resource.data.busId) &&
           resource.data.status == 'in_progress') ||
          (isSchoolParent() && 'busId' in resource.data &&
-          exists(/databases/$(database)/documents/buses/$(resource.data.busId)) &&
-          'parentIds' in get(/databases/$(database)/documents/buses/$(resource.data.busId)).data &&
-          get(/databases/$(database)/documents/buses/$(resource.data.busId)).data.parentIds is list &&
-          request.auth.uid in get(/databases/$(database)/documents/buses/$(resource.data.busId)).data.parentIds);
+          busHasParent(resource.data.busId, request.auth.uid));
       // Admins schedule/manage trips. An assigned driver may start and finish
       // only their own bus trip; attendants get read access to active trips.
       allow create: if isAdmin() && validSchoolTrip(request.resource.data) ||
@@ -379,7 +425,7 @@ service cloud.firestore {
           request.resource.data.driverId == request.auth.uid &&
           request.resource.data.status == 'in_progress' &&
           isAssignedBusStaff(request.resource.data.busId) &&
-          get(/databases/$(database)/documents/buses/$(request.resource.data.busId)).data.routeId == request.resource.data.routeId);
+          busHasRoute(request.resource.data.busId, request.resource.data.routeId));
       allow update: if isAdmin() && validSchoolTrip(request.resource.data) ||
         (isSchoolDriver() && validSchoolTrip(request.resource.data) &&
           resource.data.driverId == request.auth.uid &&
@@ -450,10 +496,7 @@ service cloud.firestore {
       allow get: if isAdmin() || (signedIn() &&
         (request.auth.uid == driverId || resource.data.userId == request.auth.uid ||
          (profileHas('assignedBusId') && resource.data.busId == profile().assignedBusId) ||
-         (('tripId' in resource.data) &&
-          exists(/databases/$(database)/documents/travelTrips/$(resource.data.tripId)) &&
-          (get(/databases/$(database)/documents/travelTrips/$(resource.data.tripId)).data.passengerId == request.auth.uid ||
-           get(/databases/$(database)/documents/travelTrips/$(resource.data.tripId)).data.driverId == request.auth.uid))));
+         (('tripId' in resource.data) && travelTripHasParticipant(resource.data.tripId, request.auth.uid))));
       allow list: if isAdmin();
       allow create, update: if isVerifiedTravelDriver() && signedIn() && request.auth.uid == driverId &&
         request.resource.data.keys().hasOnly([

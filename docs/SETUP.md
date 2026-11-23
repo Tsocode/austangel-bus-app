@@ -16,14 +16,16 @@ npm install
 cp .env.example .env
 ```
 
-Edit `.env` and set the Firebase `EXPO_PUBLIC_FIREBASE_*` values. Use separate Google Maps keys for each client:
+Edit `.env` and set the Firebase `EXPO_PUBLIC_FIREBASE_*` values. Maps use OpenFreeMap with OpenStreetMap data by default and do not need a Google API key. To switch back to Google Maps later, set `EXPO_PUBLIC_MAPS_PROVIDER=google` and configure separate Google Maps keys for each client:
 
 - `EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY`: restrict to the Android package and Maps SDK for Android.
 - `EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY`: restrict to the iOS bundle ID and Maps SDK for iOS.
 - `EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY`: restrict to the web app's HTTP referrers and the Maps Embed API.
 - `EXPO_PUBLIC_GOOGLE_PLACES_API_KEY`: enable Places API (New) and apply suitable client restrictions.
 
-The native Maps keys are included in app builds. The web tracking screen uses the web key when configured and otherwise falls back to OpenStreetMap. Restart Expo after changing `.env`; native Maps key changes also require a new native build.
+Google Maps keys remain in `.env` but are inactive unless `EXPO_PUBLIC_MAPS_PROVIDER=google`. Installed iOS and Android builds render with MapLibre and OpenFreeMap; web uses OpenStreetMap. On iOS, Expo Go uses the Apple Maps renderer bundled into Expo Go so you can preview the app without an EAS build. Custom builds use MapLibre. Restart Expo after changing `.env`; changing the native provider requires a new native build.
+
+Free place search uses Photon, and route planning uses the public OSRM routing endpoint. These community services need no app API key and have fair-use/availability limits; use a hosted provider or self-host if app traffic grows beyond reasonable public-service usage.
 
 Do not commit `.env`, `.env.local`, Stripe secret keys, or Firebase service-account credentials. The repository's `.env.local` files are ignored by Git.
 
@@ -47,7 +49,7 @@ Use `npm run android`, `npm run ios` (macOS only), or `npm run web` to launch a 
 
 ## Native maps and location
 
-The native map and location permissions are part of the app build. When changing the Google Maps key or native configuration, rebuild/reinstall the development app; restarting Metro alone does not change the binary. Expo Go may not reflect project-specific native settings. Driver GPS uses foreground location only and runs while Driver Tools is open during an active school trip. Grant location permission on the driver device and enable device location services.
+Expo Go on iOS uses its bundled Apple Maps component for preview; installed development and store builds use MapLibre/OpenFreeMap. Driver GPS uses foreground location only and runs while Driver Tools is open during an active school trip. Grant location permission on the driver device and enable device location services.
 
 ## Prepare a school-flow test
 

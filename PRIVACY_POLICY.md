@@ -1,6 +1,6 @@
 # Austangel Privacy Notice (release draft)
 
-**Last reviewed: November 22, 2026**
+**Last reviewed: November 23, 2026**
 
 This notice describes data handling visible in the current Austangel app and Firebase configuration. It is a product-accuracy draft, not a legal determination. Before release, the service owner must confirm the operating entity, contact details, applicable jurisdictions, children's consent process, and legally required retention periods with qualified counsel.
 
@@ -13,13 +13,13 @@ Depending on the features used, Austangel processes:
 - **School transport data:** bus and route assignments, trip start/end/status, check-in type, time, staff member who recorded it, optional note, and the driver's current coordinates included with a check-in when available.
 - **Location data:** a school driver's foreground device location while Driver Tools is open and a school trip is active; travel-driver location during the travel tracking flow. Current positions are used to show authorized users the bus/driver location.
 - **Travel booking and payment metadata:** pickup/drop-off details, scheduled/requested time, calculated fare, trip state, and Stripe PaymentIntent identifiers/status. Card entry is presented by Stripe PaymentSheet; the app does not intentionally store card numbers or security codes.
-- **Technical/service data:** Firebase Authentication, Firestore, Realtime Database, Cloud Functions, Google Maps (where its map SDK is used), and Stripe may process service, device, network, or diagnostic data under their own terms and privacy notices. This app does not currently integrate an app analytics or crash-reporting SDK.
+- **Technical/service data:** Firebase Authentication, Firestore, Realtime Database, Cloud Functions, MapLibre/OpenFreeMap and OpenStreetMap map tiles, Apple Maps during iOS Expo Go previews, Photon place search, OSRM route requests, Google Maps only when explicitly enabled in the build, and Stripe may process service, device, network, map viewport, search query, route coordinate, or diagnostic data under their own terms and privacy notices. This app does not currently integrate an app analytics or crash-reporting SDK.
 
 ## How data is used and shared
 
 Data is used to authenticate accounts, assign users to transportation roles, manage rosters and trips, record check-ins, show current locations to authorized users, calculate and collect ride payments, process eligible cancellations/refunds, and protect the service. Access is controlled by Firebase rules and authenticated Cloud Functions; exact access depends on role and assignment.
 
-Firebase/Google provides app infrastructure and map services. Stripe processes payments. Information may also be disclosed when required by law or to protect people and the service. Austangel does not currently describe or implement advertising or sale of personal data in the app.
+Firebase/Google provides app infrastructure. The default maps send map viewport requests to OpenFreeMap/OpenStreetMap, location searches to Photon, and route requests to OSRM; these requests can reveal network information and the searched location or route coordinates to those providers. Google Maps services are used only when the build explicitly selects the Google provider. Stripe processes payments. Information may also be disclosed when required by law or to protect people and the service. Austangel does not currently describe or implement advertising or sale of personal data in the app.
 
 ## Location behavior
 

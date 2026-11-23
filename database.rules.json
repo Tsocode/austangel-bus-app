@@ -30,7 +30,7 @@
       "$userId": {
         ".read": "auth != null && auth.uid === $userId",
         ".write": "auth != null && auth.uid === $userId",
-        ".validate": "newData.hasChildren(['tripId', 'active', 'latitude', 'longitude', 'timestamp'])",
+        ".validate": "newData.hasChildren(['tripId', 'active', 'latitude', 'longitude', 'timestamp']) || (newData.hasChild('sos') && newData.child('sos').hasChildren(['active', 'timestamp']))",
         "tripId": { ".validate": "newData.isString()" },
         "userId": { ".validate": "newData.isString() && newData.val() === auth.uid" },
         "active": { ".validate": "newData.isBoolean()" },

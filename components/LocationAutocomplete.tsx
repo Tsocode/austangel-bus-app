@@ -1,22 +1,12 @@
 import { MaterialIcons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { GOOGLE_MAPS_LEGACY_API_KEY, GOOGLE_PLACES_API_KEY, MAPBOX_TOKEN, USE_GOOGLE_MAPS } from '@/constants/mapProvider';
+import { searchOpenMapPlaces } from '@/services/maps/openMapGeocoding';
 
 export type PlaceResult = { latitude: number; longitude: number; address: string; title: string; placeId?: string };
 
-async function searchNominatim(query: string): Promise<PlaceResult[]> {
-  const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=6&q=${encodeURIComponent(query)}`, {
-    headers: { 'Accept-Language': 'en' },
-  });
-  if (!response.ok) throw new Error(`OpenStreetMap search failed (${response.status})`);
-  const data = await response.json();
-  return (data ?? []).map((item: any) => ({
-    title: item.name || item.display_name.split(',')[0], address: item.display_name,
-    latitude: Number(item.lat), longitude: Number(item.lon),
-  }));
-}
-
-/** Debounced Google Places, Mapbox, or free Nominatim location search. */
+/** Debounced Google Places or free OpenStreetMap-based location search. */
 export function LocationAutocomplete({
   label, placeholder, value, onChangeText, onSelect,
 }: {
@@ -38,8 +28,8 @@ export function LocationAutocomplete({
     const timer = setTimeout(async () => {
       setLoading(true);
       try {
-        const googleKey = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-        const mapboxToken = process.env.EXPO_PUBLIC_MAPBOX_TOKEN;
+        const googleKey = GOOGLE_PLACES_API_KEY || GOOGLE_MAPS_LEGACY_API_KEY;
+        const mapboxToken = MAPBOX_TOKEN;
         let places: PlaceResult[] = [];
         if (googleKey) {
           const response = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
@@ -72,22 +62,22 @@ export function LocationAutocomplete({
             longitude: item.geometry.coordinates[0], latitude: item.geometry.coordinates[1],
           }));
         } else {
-          places = await searchNominatim(query);
+          places = await searchOpenMapPlaces(query);
         }
         places = places.filter((place) => place.placeId || (Number.isFinite(place.latitude) && Number.isFinite(place.longitude) && (place.latitude !== 0 || place.longitude !== 0)));
-        if (!places.length && (googleKey || mapboxToken)) places = await searchNominatim(query);
+        if (!places.length && (googleKey || mapboxToken)) places = await searchOpenMapPlaces(query);
         if (requestId.current === id) setResults(places);
       } catch (error) {
         console.warn('Location autocomplete failed', error);
         try {
-          const fallback = await searchNominatim(query);
+          const fallback = await searchOpenMapPlaces(query);
           if (requestId.current === id) setResults(fallback);
         } catch (fallbackError) {
-          console.warn('OpenStreetMap location fallback failed', fallbackError);
+          console.warn('Open map location fallback failed', fallbackError);
           if (requestId.current === id) setResults([]);
         }
       } finally { if (requestId.current === id) setLoading(false); }
-    }, 300);
+    }, USE_GOOGLE_MAPS ? 300 : 700);
     return () => clearTimeout(timer);
   }, [value]);
 
@@ -102,7 +92,7 @@ export function LocationAutocomplete({
     {results.length > 0 ? <View style={styles.dropdown}>{results.map((place, index) => <Pressable
       key={`${place.placeId ?? `${place.latitude}-${place.longitude}`}-${index}`} style={styles.result} onPress={async () => {
         let resolvedPlace = place;
-        const placesKey = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+        const placesKey = GOOGLE_PLACES_API_KEY || GOOGLE_MAPS_LEGACY_API_KEY;
         if (place.placeId && placesKey) {
           setLoading(true);
           try {
@@ -115,7 +105,7 @@ export function LocationAutocomplete({
           } catch (error) {
             console.warn('Google Place Details failed; resolving with OpenStreetMap.', error);
             try {
-              const fallback = await searchNominatim(place.address || place.title);
+              const fallback = await searchOpenMapPlaces(place.address || place.title, 1);
               if (fallback[0]) resolvedPlace = fallback[0];
             } catch (fallbackError) {
               console.warn('Could not resolve selected place coordinates.', fallbackError);

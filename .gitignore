@@ -29,6 +29,7 @@ firebase-debug.log
 firebase-debug.*.log
 firestore-debug.log
 database-debug.log
+android/app/debug.keystore
 
 # macOS
 .DS_Store

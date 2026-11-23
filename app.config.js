@@ -5,6 +5,7 @@ export default ({ config }) => {
   const androidMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY || legacyMapsKey;
   const iosMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY || legacyMapsKey;
   const webMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
+  const useGoogleMaps = process.env.EXPO_PUBLIC_MAPS_PROVIDER === 'google';
 
   return {
     ...config,
@@ -15,7 +16,7 @@ export default ({ config }) => {
     icon: './assets/images/icon.png',
     scheme: 'austangel',
     userInterfaceStyle: 'automatic',
-    newArchEnabled: false,
+    newArchEnabled: true,
     ios: {
       bundleIdentifier: 'com.tsocode.austangel',
       supportsTablet: true,
@@ -36,7 +37,8 @@ export default ({ config }) => {
     plugins: [
       'expo-router',
       ['@stripe/stripe-react-native', {}],
-      ...(androidMapsKey || iosMapsKey
+      ['@maplibre/maplibre-react-native', {}],
+      ...(useGoogleMaps && (androidMapsKey || iosMapsKey)
         ? [['react-native-maps', {
             ...(androidMapsKey ? { androidGoogleMapsApiKey: androidMapsKey } : {}),
             ...(iosMapsKey ? { iosGoogleMapsApiKey: iosMapsKey } : {}),
@@ -66,9 +68,12 @@ export default ({ config }) => {
       expoPublicFirebaseStorageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
       expoPublicFirebaseMessagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
       expoPublicFirebaseAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-      expoPublicGoogleMapsAndroidApiKey: androidMapsKey,
-      expoPublicGoogleMapsIosApiKey: iosMapsKey,
-      expoPublicGoogleMapsWebApiKey: webMapsKey,
+      expoPublicGoogleMapsAndroidApiKey: useGoogleMaps ? androidMapsKey : undefined,
+      expoPublicGoogleMapsIosApiKey: useGoogleMaps ? iosMapsKey : undefined,
+      expoPublicGoogleMapsWebApiKey: useGoogleMaps ? webMapsKey : undefined,
+      expoPublicGoogleMapsLegacyApiKey: useGoogleMaps ? legacyMapsKey : undefined,
+      expoPublicGooglePlacesApiKey: useGoogleMaps ? process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY : undefined,
+      expoPublicMapboxToken: useGoogleMaps ? process.env.EXPO_PUBLIC_MAPBOX_TOKEN : undefined,
     },
   };
 };

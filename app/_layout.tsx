@@ -3,7 +3,10 @@ import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useMemo } from 'react';
-import { ActivityIndicator, View, Platform } from 'react-native';
+import { ActivityIndicator, LogBox, View, Platform } from 'react-native';
+
+// This notice only reflects the device's Accessibility > Motion setting.
+LogBox.ignoreLogs(['[Reanimated] Reduced motion setting is enabled on this device']);
 
 // Only import react-native-reanimated on native platforms
 // On web, Reanimated animations are not supported

@@ -6,6 +6,7 @@ import { Colors } from '@/constants/Colors';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { LocationAutocomplete, PlaceResult } from '@/components/LocationAutocomplete';
 import { Layout } from '@/constants/Layout';
+import { GOOGLE_MAPS_WEB_API_KEY } from '@/constants/mapProvider';
 
 /**
  * Web map using OpenStreetMap's embeddable map; native tracking uses track.tsx.
@@ -18,7 +19,7 @@ export default function TrackScreenWeb() {
   const center = place ?? { latitude: 6.5244, longitude: 3.3792 };
   const markerQuery = place ? `&marker=${center.latitude},${center.longitude}` : '';
   const bbox = `${center.longitude - 0.025},${center.latitude - 0.018},${center.longitude + 0.025},${center.latitude + 0.018}`;
-  const googleWebKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
+  const googleWebKey = GOOGLE_MAPS_WEB_API_KEY;
   const googleMapUrl = `https://www.google.com/maps/embed/v1/${place ? 'place' : 'view'}?key=${encodeURIComponent(googleWebKey ?? '')}${place ? `&q=${encodeURIComponent(`${center.latitude},${center.longitude}`)}` : `&center=${center.latitude},${center.longitude}&zoom=12`}`;
   const osmMapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(bbox)}&layer=mapnik${markerQuery}`;
   const mapUrl = googleWebKey ? googleMapUrl : osmMapUrl;

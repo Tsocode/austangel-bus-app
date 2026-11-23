@@ -1,4 +1,0 @@
-10:12:36.911 [NamespaceSystem-akka.actor.default-dispatcher-5] INFO akka.event.slf4j.Slf4jLogger - Slf4jLogger started
-10:12:37.142 [main] INFO com.firebase.server.forge.App$ - Listening at 0.0.0.0:9000
-10:12:46.753 [NamespaceSystem-akka.actor.default-dispatcher-5] INFO com.firebase.core.namespace.NamespaceActor - austangels-default-rtdb successfully activated FBKV (SurveyIdle(0)) wait: 192ms, init: 0ms
-10:12:46.962 [NamespaceSystem-blocking-namespace-operation-dispatcher-7] INFO com.firebase.core.namespace.StateManager - Namespace austangels-default-rtdb status Active to Active
