@@ -1,7 +1,10 @@
 import 'dotenv/config';
 
 export default ({ config }) => {
-  const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const legacyMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+  const androidMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY || legacyMapsKey;
+  const iosMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY || legacyMapsKey;
+  const webMapsKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
 
   return {
     ...config,
@@ -16,13 +19,6 @@ export default ({ config }) => {
     ios: {
       bundleIdentifier: 'com.tsocode.austangel',
       supportsTablet: true,
-      ...(googleMapsApiKey
-        ? {
-            config: {
-              googleMapsApiKey,
-            },
-          }
-        : {}),
     },
     android: {
       package: 'com.tsocode.austangel',
@@ -31,15 +27,6 @@ export default ({ config }) => {
         backgroundColor: '#ffffff',
       },
       edgeToEdgeEnabled: true,
-      ...(googleMapsApiKey
-        ? {
-            config: {
-              googleMaps: {
-                apiKey: googleMapsApiKey,
-              },
-            },
-          }
-        : {}),
     },
     web: {
       bundler: 'metro',
@@ -49,6 +36,12 @@ export default ({ config }) => {
     plugins: [
       'expo-router',
       ['@stripe/stripe-react-native', {}],
+      ...(androidMapsKey || iosMapsKey
+        ? [['react-native-maps', {
+            ...(androidMapsKey ? { androidGoogleMapsApiKey: androidMapsKey } : {}),
+            ...(iosMapsKey ? { iosGoogleMapsApiKey: iosMapsKey } : {}),
+          }]]
+        : []),
       [
         'expo-splash-screen',
         {
@@ -73,7 +66,9 @@ export default ({ config }) => {
       expoPublicFirebaseStorageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET,
       expoPublicFirebaseMessagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
       expoPublicFirebaseAppId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
-      expoPublicGoogleMapsApiKey: googleMapsApiKey,
+      expoPublicGoogleMapsAndroidApiKey: androidMapsKey,
+      expoPublicGoogleMapsIosApiKey: iosMapsKey,
+      expoPublicGoogleMapsWebApiKey: webMapsKey,
     },
   };
 };

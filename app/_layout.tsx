@@ -2,7 +2,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { useFonts } from 'expo-font';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { ActivityIndicator, View, Platform } from 'react-native';
 
 // Only import react-native-reanimated on native platforms
@@ -18,6 +18,7 @@ if (Platform.OS !== 'web') {
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { AppearanceProvider } from '@/providers/AppearanceProvider';
 import { AuthProvider, useAuthContext } from '@/providers/AuthProvider';
+import { Colors } from '@/constants/Colors';
 
 function RootNavigation() {
   const { status, primaryService } = useAuthContext();
@@ -49,6 +50,7 @@ function RootNavigation() {
 
       // User is authorized, navigate to appropriate dashboard (but only if not already there)
       if (status === 'authorized') {
+        if (currentScreen === 'select-service') return;
         if (primaryService === 'school') {
           router.replace('/(tabs)');
         } else {
@@ -116,8 +118,22 @@ export default function RootLayout() {
 
 function ThemedApp() {
   const colorScheme = useColorScheme();
+  const palette = Colors[colorScheme === 'dark' ? 'dark' : 'light'];
+  const baseTheme = colorScheme === 'dark' ? DarkTheme : DefaultTheme;
+  const navigationTheme = useMemo(() => ({
+    ...baseTheme,
+    colors: {
+      ...baseTheme.colors,
+      primary: palette.tint,
+      background: palette.background,
+      card: palette.surface,
+      text: palette.text,
+      border: palette.border,
+      notification: palette.accent,
+    },
+  }), [baseTheme, palette]);
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+    <ThemeProvider value={navigationTheme}>
       <RootNavigation />
       <StatusBar style="auto" />
     </ThemeProvider>

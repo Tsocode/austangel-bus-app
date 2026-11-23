@@ -25,6 +25,39 @@
     "trips": {
       ".read": "auth != null && auth.token.role === 'admin'",
       ".write": "auth != null && auth.token.role === 'admin'"
+    },
+    "activeTravelTrips": {
+      "$userId": {
+        ".read": "auth != null && auth.uid === $userId",
+        ".write": "auth != null && auth.uid === $userId",
+        ".validate": "newData.hasChildren(['tripId', 'active', 'latitude', 'longitude', 'timestamp'])",
+        "tripId": { ".validate": "newData.isString()" },
+        "userId": { ".validate": "newData.isString() && newData.val() === auth.uid" },
+        "active": { ".validate": "newData.isBoolean()" },
+        "latitude": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+        "longitude": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+        "speed": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "heading": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 360" },
+        "accuracy": { ".validate": "newData.isNumber() && newData.val() >= 0" },
+        "timestamp": { ".validate": "newData.isNumber()" },
+        "stoppedAt": { ".validate": "newData.isNumber()" },
+        "destination": {
+          ".validate": "newData.hasChildren(['latitude', 'longitude', 'address'])",
+          "latitude": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+          "longitude": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+          "address": { ".validate": "newData.isString()" },
+          "$other": { ".validate": false }
+        },
+        "sos": {
+          ".validate": "newData.hasChildren(['active', 'timestamp'])",
+          "active": { ".validate": "newData.isBoolean()" },
+          "timestamp": { ".validate": "newData.isNumber()" },
+          "latitude": { ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90" },
+          "longitude": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+          "$other": { ".validate": false }
+        },
+        "$other": { ".validate": false }
+      }
     }
   }
 }

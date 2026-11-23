@@ -1,10 +1,12 @@
-import { Pressable, ScrollView, StyleSheet, Switch, Text, View, TextInput, Alert, KeyboardAvoidingView, Platform, Keyboard, ActivityIndicator } from 'react-native';
-import { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, Switch, Text, View, TextInput, Alert, KeyboardAvoidingView, Platform, Keyboard, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { useEffect, useState } from 'react';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useThemePreference } from '@/providers/AppearanceProvider';
 import { useAuthContext } from '@/providers/AuthProvider';
@@ -31,20 +33,62 @@ export default function SettingsScreen() {
   const [showAdminCode, setShowAdminCode] = useState(false);
   const [isPromotingToAdmin, setIsPromotingToAdmin] = useState(false);
   const [isRebuildingAccessMaps, setIsRebuildingAccessMaps] = useState(false);
+  const [weeklySummaryEnabled, setWeeklySummaryEnabled] = useState(false);
+  const [isLoadingWeeklySummary, setIsLoadingWeeklySummary] = useState(true);
+  const { width } = useWindowDimensions();
+  const isWideWeb = Platform.OS === 'web' && width >= Layout.desktopBreakpoint;
   const colorScheme = useColorScheme() ?? 'light';
   const isDark = colorScheme === 'dark';
   const theme = Colors[colorScheme];
   const palette = {
     screenBg: theme.background,
-    heroBg: isDark ? '#0f172a' : '#EEF2FF',
-    cardBg: isDark ? '#111827' : '#fff',
-    border: isDark ? '#1f2937' : '#E5E7EB',
-    textStrong: isDark ? '#f8fafc' : '#111827',
-    textMuted: isDark ? '#94a3b8' : '#4B5563',
-    textSubtle: isDark ? '#9ca3af' : '#475569',
-    segmentBg: isDark ? '#0b1220' : '#F1F5F9',
-    segmentActive: isDark ? '#1f2937' : '#111827',
+    heroBg: theme.surfaceMuted,
+    cardBg: theme.surface,
+    border: theme.border,
+    textStrong: theme.text,
+    textMuted: theme.icon,
+    textSubtle: theme.icon,
+    segmentBg: theme.surfaceMuted,
+    segmentActive: isDark ? '#2D424B' : '#14232B',
     toggleTrack: isDark ? '#1f2937' : '#e5e7eb',
+  };
+
+  useEffect(() => {
+    let active = true;
+    const userId = profile?.id;
+    if (!userId) {
+      setWeeklySummaryEnabled(false);
+      setIsLoadingWeeklySummary(false);
+      return;
+    }
+
+    setIsLoadingWeeklySummary(true);
+    AsyncStorage.getItem(`settings:weekly-summary:${userId}`)
+      .then((storedValue) => {
+        if (active) setWeeklySummaryEnabled(storedValue === 'true');
+      })
+      .catch((error) => {
+        console.warn('Could not load weekly summary preference:', error);
+      })
+      .finally(() => {
+        if (active) setIsLoadingWeeklySummary(false);
+      });
+
+    return () => { active = false; };
+  }, [profile?.id]);
+
+  const handleWeeklySummaryChange = async (enabled: boolean) => {
+    const userId = profile?.id;
+    if (!userId) return;
+    const previousValue = weeklySummaryEnabled;
+    setWeeklySummaryEnabled(enabled);
+    try {
+      await AsyncStorage.setItem(`settings:weekly-summary:${userId}`, String(enabled));
+    } catch (error) {
+      console.error('Could not save weekly summary preference:', error);
+      setWeeklySummaryEnabled(previousValue);
+      Alert.alert('Could not save setting', 'Please try again.');
+    }
   };
 
   /**
@@ -74,10 +118,14 @@ export default function SettingsScreen() {
 
       if (result.success) {
         // Backend already updated the user role in Firestore
-        await auth.currentUser?.getIdToken(true);
+        await auth.currentUser?.getIdToken(true).catch((refreshError) => {
+          console.warn('Admin access was granted, but the ID token could not refresh:', refreshError);
+        });
         // Reload profile to reflect the changes
-        await reloadProfile();
-        Alert.alert('Success! 🎉', 'You have been promoted to Admin. The changes will appear immediately.');
+        await reloadProfile().catch((refreshError) => {
+          console.warn('Admin access was granted, but the profile could not refresh:', refreshError);
+        });
+        Alert.alert('Admin access granted', 'Your role is active. Reopen the app or sign in again if admin features do not appear yet.');
         setAdminCode('');
         setShowAdminCode(false);
       } else {
@@ -114,7 +162,7 @@ export default function SettingsScreen() {
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
-      <ScrollView contentContainerStyle={[styles.container, { backgroundColor: palette.screenBg }]} keyboardShouldPersistTaps="handled">
+      <ScrollView contentContainerStyle={[styles.container, isWideWeb && styles.webContainer, { backgroundColor: palette.screenBg }]} keyboardShouldPersistTaps="handled">
       <ThemedView style={[styles.hero, { backgroundColor: palette.heroBg }]}>
         <ThemedText type="title">Settings</ThemedText>
         <ThemedText type="default" style={[styles.subtle, { color: palette.textMuted }]}>
@@ -210,7 +258,11 @@ export default function SettingsScreen() {
           <Text style={[styles.settingLabel, { color: palette.textStrong }]}>Weekly summary</Text>
           <Switch
             trackColor={{ false: palette.toggleTrack, true: theme.tint }}
+            value={weeklySummaryEnabled}
+            onValueChange={handleWeeklySummaryChange}
+            disabled={isLoadingWeeklySummary || !profile?.id}
             accessibilityLabel="Toggle weekly summary"
+            accessibilityState={{ checked: weeklySummaryEnabled, disabled: isLoadingWeeklySummary || !profile?.id }}
           />
         </View>
       </ThemedView>
@@ -236,6 +288,9 @@ export default function SettingsScreen() {
                 secureTextEntry={!showAdminCode}
                 value={adminCode}
                 onChangeText={setAdminCode}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
                 style={[styles.input, { color: palette.textStrong }]}
                 placeholderTextColor={palette.textMuted}
               />
@@ -309,12 +364,16 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: {
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: 920,
     padding: 18,
-    paddingTop: 48,
+    paddingTop: 24,
     gap: 14,
   },
+  webContainer: { paddingTop: 40, paddingHorizontal: 28, paddingBottom: 48 },
   hero: {
-    padding: 18,
+    padding: 20,
     borderRadius: 18,
     backgroundColor: '#EEF2FF',
     gap: 6,
@@ -324,7 +383,7 @@ const styles = StyleSheet.create({
   },
   card: {
     padding: 14,
-    borderRadius: 14,
+    borderRadius: Layout.radius.card,
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#E5E7EB',

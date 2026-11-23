@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
+import { createElement } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,9 +14,26 @@ import {
   View,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { LocationAutocomplete, PlaceResult } from '@/components/LocationAutocomplete';
+
+let NativeMap: any = null;
+let NativeMarker: any = null;
+let NativePolyline: any = null;
+let NativeGoogleMapsProvider: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    const maps = require('react-native-maps');
+    NativeMap = maps.default; NativeMarker = maps.Marker; NativePolyline = maps.Polyline;
+    NativeGoogleMapsProvider = maps.PROVIDER_GOOGLE;
+  } catch (error) {
+    NativeMap = null;
+    console.error('Travel map module failed to load:', error);
+  }
+}
 
 import { useAuthContext } from '@/providers/AuthProvider';
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { TravelTrip } from '@/models/travel-trip';
 import {
@@ -51,6 +69,10 @@ export default function MonitorTripScreen() {
   const [loading, setLoading] = useState(true);
   const [busyTripId, setBusyTripId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [destinationQuery, setDestinationQuery] = useState('');
+  const [destination, setDestination] = useState<PlaceResult | null>(null);
+  const [followLiveMap, setFollowLiveMap] = useState(true);
+  const mapRef = useRef<any>(null);
 
   useEffect(() => {
     if (!uid) {
@@ -180,7 +202,7 @@ export default function MonitorTripScreen() {
     const canCancel = !isTravelDriver && ['requested', 'accepted'].includes(trip.status);
 
     return (
-      <View key={trip.id} style={[styles.tripCard, { backgroundColor: colorScheme === 'dark' ? '#1f2937' : '#fff', borderColor: theme.icon }]}>
+      <View key={trip.id} style={[styles.tripCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
         <View style={styles.tripHeader}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.route, { color: theme.text }]}>
@@ -207,7 +229,7 @@ export default function MonitorTripScreen() {
         </View>
 
         {!isTravelDriver && trip.driverId && ['accepted', 'in_progress'].includes(trip.status) && (
-          <View style={[styles.locationBox, { backgroundColor: colorScheme === 'dark' ? '#111827' : '#eff6ff' }]}>
+          <View style={[styles.locationBox, { backgroundColor: theme.surfaceMuted }]}>
             <MaterialIcons name="location-on" size={18} color={theme.tint} />
             <Text style={[styles.locationText, { color: theme.text }]}>
               {location
@@ -234,9 +256,45 @@ export default function MonitorTripScreen() {
   };
 
   const allTrips = myTrips;
+  const visibleMapTrip = trackableTrips[0];
+  const vehicleLocation = visibleMapTrip ? locations[visibleMapTrip.id] : null;
+  const mapDestination = destination ?? (visibleMapTrip?.dropoffLocation ? {
+    latitude: visibleMapTrip.dropoffLocation.latitude,
+    longitude: visibleMapTrip.dropoffLocation.longitude,
+    address: visibleMapTrip.dropoffLocation.address,
+    title: visibleMapTrip.dropoffLocation.address,
+  } : null);
+  const webMapCenter = mapDestination ?? { latitude: 6.5244, longitude: 3.3792 };
+  const webMapBox = `${webMapCenter.longitude - 0.03},${webMapCenter.latitude - 0.02},${webMapCenter.longitude + 0.03},${webMapCenter.latitude + 0.02}`;
+  const googleWebKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY;
+  const webMapUrl = googleWebKey
+    ? `https://www.google.com/maps/embed/v1/place?key=${encodeURIComponent(googleWebKey)}&q=${encodeURIComponent(`${webMapCenter.latitude},${webMapCenter.longitude}`)}`
+    : `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(webMapBox)}&layer=mapnik&marker=${webMapCenter.latitude},${webMapCenter.longitude}`;
+  useEffect(() => {
+    if (followLiveMap && vehicleLocation && mapRef.current) {
+      mapRef.current.animateToRegion({ latitude: vehicleLocation.latitude, longitude: vehicleLocation.longitude,
+        latitudeDelta: 0.04, longitudeDelta: 0.04 }, 350);
+    }
+  }, [vehicleLocation?.latitude, vehicleLocation?.longitude, followLiveMap]);
+  const selectDestination = (place: PlaceResult) => {
+    setDestination(place);
+    setDestinationQuery(place.address);
+    setFollowLiveMap(false);
+    if (vehicleLocation && mapRef.current) {
+      mapRef.current.fitToCoordinates([
+        { latitude: vehicleLocation.latitude, longitude: vehicleLocation.longitude },
+        { latitude: place.latitude, longitude: place.longitude },
+      ], { edgePadding: { top: 35, right: 35, bottom: 35, left: 35 }, animated: true });
+    }
+  };
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      <View style={styles.searchBox}>
+        <LocationAutocomplete placeholder="Search destination or location" value={destinationQuery}
+          onChangeText={setDestinationQuery} onSelect={selectDestination} />
+        {destination ? <Text style={[styles.destinationText, { color: theme.text }]}>Destination selected · {destination.latitude.toFixed(5)}, {destination.longitude.toFixed(5)}</Text> : null}
+      </View>
       <View style={styles.header}>
         <View>
           <Text style={[styles.title, { color: theme.text }]}>{isTravelDriver ? 'Driver trips' : 'Your trips'}</Text>
@@ -247,6 +305,33 @@ export default function MonitorTripScreen() {
         <TouchableOpacity onPress={() => router.push('/(travel)/book-appointment')} style={[styles.bookIcon, { backgroundColor: theme.tint }]} accessibilityRole="button" accessibilityLabel="Book a ride">
           <MaterialIcons name="add" size={24} color="#fff" />
         </TouchableOpacity>
+      </View>
+
+      <View style={styles.mapFrame}>
+        {Platform.OS === 'web' ? createElement('iframe' as any, {
+          title: 'Live travel trip map',
+          src: webMapUrl,
+          style: { width: '100%', height: '100%', border: 0 }, loading: 'lazy',
+        }) : NativeMap && (vehicleLocation || mapDestination) ? <><NativeMap ref={mapRef} style={styles.map}
+          provider={((Platform.OS === 'ios' && process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY) ||
+            (Platform.OS === 'android' && process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY) ||
+            process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY) ? NativeGoogleMapsProvider : undefined}
+          initialRegion={{
+          latitude: vehicleLocation?.latitude ?? mapDestination!.latitude, longitude: vehicleLocation?.longitude ?? mapDestination!.longitude,
+          latitudeDelta: 0.04, longitudeDelta: 0.04,
+        }} onPanDrag={() => setFollowLiveMap(false)}>
+          {vehicleLocation ? <NativeMarker coordinate={{ latitude: vehicleLocation.latitude, longitude: vehicleLocation.longitude }} title="Live vehicle" pinColor={theme.tint} /> : null}
+          {mapDestination ? <>
+            <NativeMarker coordinate={{ latitude: mapDestination.latitude, longitude: mapDestination.longitude }} title={mapDestination.title} pinColor="#dc2626" />
+            {vehicleLocation ? <NativePolyline coordinates={[{ latitude: vehicleLocation.latitude, longitude: vehicleLocation.longitude }, { latitude: mapDestination.latitude, longitude: mapDestination.longitude }]} strokeWidth={4} strokeColor="#2563eb" /> : null}
+          </> : null}
+        </NativeMap><TouchableOpacity onPress={() => {
+          setFollowLiveMap(true);
+          if (vehicleLocation) mapRef.current?.animateToRegion({ latitude: vehicleLocation.latitude, longitude: vehicleLocation.longitude, latitudeDelta: 0.04, longitudeDelta: 0.04 }, 350);
+        }} style={[styles.followControl, { backgroundColor: theme.surface, borderColor: theme.border }]}><MaterialIcons name="my-location" size={17} color={theme.tint} /><Text style={[styles.followText, { color: theme.text }]}>{followLiveMap ? 'Following trip' : 'Follow trip'}</Text></TouchableOpacity></> : <View style={[styles.map, styles.mapPlaceholder, { backgroundColor: theme.surfaceMuted }]}>
+          <MaterialIcons name="map" size={30} color={theme.tint} />
+          <Text style={[styles.mapPlaceholderText, { color: theme.text }]}>{vehicleLocation ? 'Map available on iOS and Android' : 'Live vehicle location will appear here'}</Text>
+        </View>}
       </View>
 
       {loading ? <ActivityIndicator style={{ marginTop: 32 }} color={theme.tint} /> : null}
@@ -301,28 +386,36 @@ function ActionButton({ title, icon, busy, onPress, tint }: {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { padding: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  searchBox: { width: '100%', maxWidth: Layout.pageWidth, alignSelf: 'center', zIndex: 20, paddingHorizontal: Layout.pageGutter, paddingTop: 16 },
+  destinationText: { fontSize: 14, marginTop: 8 },
+  mapFrame: { width: '96%', maxWidth: 1280, alignSelf: 'center', height: 260, marginHorizontal: 16, borderRadius: Layout.radius.card, overflow: 'hidden', marginBottom: 8 },
+  map: { width: '100%', height: '100%' },
+  mapPlaceholder: { alignItems: 'center', justifyContent: 'center', gap: 8, padding: 18 },
+  mapPlaceholderText: { textAlign: 'center', fontSize: 14, fontWeight: '600' },
+  followControl: { position: 'absolute', top: 10, right: 10, minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 22, borderWidth: 1, paddingHorizontal: 14, elevation: 4 },
+  followText: { fontSize: 14, fontWeight: '700' },
+  header: { width: '100%', maxWidth: Layout.pageWidth, alignSelf: 'center', padding: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   title: { fontSize: 24, fontWeight: '700' },
-  subtitle: { fontSize: 13, marginTop: 4 },
-  bookIcon: { width: 42, height: 42, borderRadius: 21, justifyContent: 'center', alignItems: 'center' },
-  sectionTitle: { fontSize: 16, fontWeight: '700', marginHorizontal: 20, marginTop: 8, marginBottom: 10 },
-  list: { paddingHorizontal: 20, paddingBottom: 28 },
-  tripCard: { borderWidth: 1, borderRadius: 14, padding: 14, marginBottom: 12 },
+  subtitle: { fontSize: 14, marginTop: 4 },
+  bookIcon: { width: 48, height: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center' },
+  sectionTitle: { width: '100%', maxWidth: Layout.pageWidth, alignSelf: 'center', fontSize: 18, fontWeight: '700', paddingHorizontal: 20, marginTop: 8, marginBottom: 10 },
+  list: { width: '100%', maxWidth: Layout.pageWidth, alignSelf: 'center', paddingHorizontal: 20, paddingBottom: 28 },
+  tripCard: { width: '100%', alignSelf: 'center', borderWidth: 1, borderRadius: Layout.radius.card, padding: 16, marginBottom: 12 },
   tripHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   route: { flex: 1, fontSize: 14, fontWeight: '600' },
-  time: { fontSize: 11, marginTop: 5 },
-  status: { fontSize: 10, fontWeight: '700' },
+  time: { fontSize: 13, marginTop: 5 },
+  status: { fontSize: 13, fontWeight: '700' },
   tripMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 },
   metaText: { fontSize: 12 },
   fare: { fontSize: 14, fontWeight: '700' },
   locationBox: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: 10, borderRadius: 8, marginTop: 12 },
-  locationText: { flex: 1, fontSize: 11 },
+  locationText: { flex: 1, fontSize: 13 },
   actionButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 8, padding: 12, marginTop: 12 },
-  actionText: { color: '#fff', fontWeight: '600', fontSize: 13 },
+  actionText: { color: '#fff', fontWeight: '600', fontSize: 15 },
   emptyState: { alignItems: 'center', padding: 24 },
   emptyTitle: { fontSize: 16, fontWeight: '600', marginTop: 12 },
   emptyText: { marginHorizontal: 20, marginBottom: 14, fontSize: 13 },
   bookButton: { borderRadius: 8, paddingHorizontal: 20, paddingVertical: 11, marginTop: 14 },
-  bookButtonText: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  bookButtonText: { color: '#fff', fontSize: 15, fontWeight: '600' },
   error: { color: '#dc2626', paddingHorizontal: 20, marginVertical: 8 },
 });

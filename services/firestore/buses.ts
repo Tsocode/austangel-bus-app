@@ -1,4 +1,4 @@
-import { addDoc, collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, getDocs, query, runTransaction, updateDoc, where } from 'firebase/firestore';
 
 import { Bus } from '@/models/bus';
 import { db } from '@/services/firebase';
@@ -132,7 +132,13 @@ export async function createBus(
 
   if (id) {
     const ref = doc(db, COLLECTION, id);
-    await setDoc(ref, payload, { merge: true });
+    await runTransaction(db, async (transaction) => {
+      const existingBus = await transaction.get(ref);
+      if (existingBus.exists()) {
+        throw new Error(`A bus with ID ${id} already exists. Choose another ID.`);
+      }
+      transaction.set(ref, payload);
+    });
     return id;
   }
 

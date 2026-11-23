@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Animated, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { TravelTrip } from '@/models/travel-trip';
 import { getTrip } from '@/services/firebase-travel';
@@ -78,16 +80,16 @@ function formatAmount(trip: TravelTrip) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 22 },
+  content: { width: '100%', maxWidth: 680, alignSelf: 'center', flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   successCircle: { width: 96, height: 96, borderRadius: 48, backgroundColor: '#059669', alignItems: 'center', justifyContent: 'center', marginBottom: 24 },
   title: { fontSize: 24, fontWeight: '700', textAlign: 'center' },
   subtitle: { fontSize: 13, lineHeight: 19, textAlign: 'center', marginTop: 8, marginBottom: 20 },
-  card: { width: '100%', borderRadius: 12, padding: 16, gap: 14 },
+  card: { width: '100%', borderRadius: Layout.radius.card, padding: 20, gap: 16 },
   detail: { gap: 4 },
   label: { fontSize: 11, opacity: 0.7 },
   value: { fontSize: 13, fontWeight: '600' },
   buttons: { padding: 20, gap: 10 },
-  button: { borderRadius: 9, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  button: { minHeight: 50, borderRadius: Layout.radius.control, padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   secondary: { backgroundColor: 'transparent', borderWidth: 1.5 },
   buttonText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   secondaryText: { fontSize: 14, fontWeight: '700' },

@@ -1,27 +1,51 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, SafeAreaView, ActivityIndicator } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 
-import { useAuthContext } from '@/providers/AuthProvider';
+import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
+import { useColorScheme } from '@/hooks/useColorScheme';
 import { ServiceType } from '@/models/user';
+import { useAuthContext } from '@/providers/AuthProvider';
+
+const SERVICES: { id: ServiceType; title: string; description: string; icon: 'directions-bus' | 'directions-car'; iconColor: string }[] = [
+  {
+    id: 'school',
+    title: 'School transport',
+    description: 'Track school buses, manage attendance, and stay connected with drivers.',
+    icon: 'directions-bus',
+    iconColor: '#087E83',
+  },
+  {
+    id: 'travel',
+    title: 'Travel & rides',
+    description: 'Book rides, follow trips, and manage your transportation needs.',
+    icon: 'directions-car',
+    iconColor: '#188B63',
+  },
+];
 
 export default function SelectServiceScreen() {
   const router = useRouter();
-  const { switchService } = useAuthContext();
+  const { switchService, status, primaryService } = useAuthContext();
+  const colorScheme = useColorScheme() ?? 'light';
+  const theme = Colors[colorScheme];
+  const { width } = useWindowDimensions();
+  const isWideWeb = Platform.OS === 'web' && width >= Layout.desktopBreakpoint;
   const [loading, setLoading] = useState(false);
-  const [selectedService, setSelectedService] = useState<ServiceType>('school');
+  const [selectedService, setSelectedService] = useState<ServiceType>(primaryService ?? 'school');
 
-  const handleServiceSelect = async (service: ServiceType) => {
+  const handleContinue = async () => {
     setLoading(true);
     try {
-      setSelectedService(service);
-      if (switchService) {
-        await switchService(service);
+      await switchService?.(selectedService);
+      if (status === 'authorized') {
+        router.replace(selectedService === 'travel' ? '/(travel)' : '/(tabs)');
+      } else {
+        router.replace({ pathname: '/(auth)/login', params: { service: selectedService } });
       }
-      
-      // Navigate to login screen for selected service
-      router.replace('/(auth)/login');
     } catch (error) {
       console.error('Failed to switch service:', error);
       setLoading(false);
@@ -29,190 +53,90 @@ export default function SelectServiceScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.content}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.title}>Choose Your Service</Text>
-          <Text style={styles.subtitle}>
-            Select which service you'd like to use
-          </Text>
-        </View>
+    <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
+      <ScrollView contentContainerStyle={styles.scrollContent}>
+        <View style={[styles.content, isWideWeb && styles.webContent]}>
+          <Pressable style={styles.backButton} onPress={() => router.replace('/')} accessibilityRole="button" accessibilityLabel="Back to welcome">
+            <MaterialIcons name="arrow-back" size={20} color={theme.tint} />
+            <Text style={[styles.backText, { color: theme.tint }]}>Welcome</Text>
+          </Pressable>
 
-        {/* School Transport Option */}
-        <TouchableOpacity
-          style={[
-            styles.serviceCard,
-            selectedService === 'school' && styles.serviceCardSelected,
-          ]}
-          onPress={() => setSelectedService('school')}
-          disabled={loading}
-          activeOpacity={0.7}>
-          <View style={styles.iconContainer}>
-            <MaterialIcons name="directions-bus" size={48} color="#2563eb" />
+          <View style={styles.header}>
+            <Text style={[styles.eyebrow, { color: theme.tint }]}>YOUR JOURNEY STARTS HERE</Text>
+            <Text style={[styles.title, { color: theme.text }]}>Choose your service</Text>
+            <Text style={[styles.subtitle, { color: theme.icon }]}>Select the Austangel experience you want to use.</Text>
           </View>
-          <Text style={styles.serviceName}>School Transport</Text>
-          <Text style={styles.serviceDescription}>
-            Track school buses, manage attendance, and stay connected with drivers
-          </Text>
-          {selectedService === 'school' && (
-            <View style={styles.selectedBadge}>
-              <MaterialIcons name="check-circle" size={20} color="#fff" />
-              <Text style={styles.selectedText}>Selected</Text>
-            </View>
-          )}
-        </TouchableOpacity>
 
-        {/* Travel & Rides Option */}
-        <TouchableOpacity
-          style={[
-            styles.serviceCard,
-            selectedService === 'travel' && styles.serviceCardSelected,
-          ]}
-          onPress={() => setSelectedService('travel')}
-          disabled={loading}
-          activeOpacity={0.7}>
-          <View style={styles.iconContainer}>
-            <MaterialIcons name="directions-car" size={48} color="#dc2626" />
+          <View style={[styles.serviceList, isWideWeb && styles.webServiceList]}>
+            {SERVICES.map((service) => {
+              const selected = selectedService === service.id;
+              return (
+                <Pressable
+                  key={service.id}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                  onPress={() => setSelectedService(service.id)}
+                  disabled={loading}
+                  style={({ pressed }) => [
+                    styles.serviceCard,
+                    {
+                      width: isWideWeb ? '48.5%' : '100%',
+                      backgroundColor: selected ? theme.surfaceMuted : theme.surface,
+                      borderColor: selected ? theme.tint : theme.border,
+                      opacity: pressed ? 0.9 : 1,
+                    },
+                  ]}>
+                  <View style={[styles.serviceIcon, { backgroundColor: theme.surfaceMuted }]}>
+                    <MaterialIcons name={service.icon} size={30} color={service.iconColor} />
+                  </View>
+                  <Text style={[styles.serviceTitle, { color: theme.text }]}>{service.title}</Text>
+                  <Text style={[styles.serviceDescription, { color: theme.icon }]}>{service.description}</Text>
+                  <View style={styles.cardFooter}>
+                    <Text style={[styles.selectLabel, { color: selected ? theme.tint : theme.icon }]}>{selected ? 'Selected' : 'Choose service'}</Text>
+                    <MaterialIcons name={selected ? 'check-circle' : 'radio-button-unchecked'} size={22} color={selected ? theme.tint : theme.icon} />
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
-          <Text style={styles.serviceName}>Travel & Rides</Text>
-          <Text style={styles.serviceDescription}>
-            Book rides, manage group trips, or offer private transportation services
-          </Text>
-          {selectedService === 'travel' && (
-            <View style={styles.selectedBadge}>
-              <MaterialIcons name="check-circle" size={20} color="#fff" />
-              <Text style={styles.selectedText}>Selected</Text>
-            </View>
-          )}
-        </TouchableOpacity>
 
-        {/* Continue Button */}
-        <TouchableOpacity
-          style={[styles.continueButton, loading && styles.continueButtonDisabled]}
-          onPress={() => handleServiceSelect(selectedService)}
-          disabled={loading}>
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Text style={styles.continueButtonText}>Continue to Login</Text>
+          <Pressable
+            style={({ pressed }) => [styles.continueButton, { backgroundColor: theme.tint, opacity: loading ? 0.7 : pressed ? 0.9 : 1 }]}
+            onPress={handleContinue}
+            disabled={loading}
+            accessibilityRole="button">
+            {loading ? <ActivityIndicator color="#fff" /> : <>
+              <Text style={styles.continueButtonText}>Continue</Text>
               <MaterialIcons name="arrow-forward" size={20} color="#fff" />
-            </>
-          )}
-        </TouchableOpacity>
-
-        {/* Can Switch Later Note */}
-        <Text style={styles.switchNote}>
-          💡 You can switch services anytime from your profile settings
-        </Text>
-      </View>
+            </>}
+          </Pressable>
+          <Text style={[styles.switchNote, { color: theme.icon }]}>You can switch services anytime from your account.</Text>
+        </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f9fafb',
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-    justifyContent: 'space-between',
-  },
-  header: {
-    marginBottom: 32,
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#1f2937',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#6b7280',
-    textAlign: 'center',
-  },
-  serviceCard: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 20,
-    marginBottom: 16,
-    borderWidth: 2,
-    borderColor: '#e5e7eb',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  serviceCardSelected: {
-    borderColor: '#3b82f6',
-    backgroundColor: '#eff6ff',
-    shadowOpacity: 0.15,
-  },
-  iconContainer: {
-    marginBottom: 12,
-  },
-  serviceName: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#1f2937',
-    marginBottom: 8,
-  },
-  serviceDescription: {
-    fontSize: 14,
-    color: '#6b7280',
-    lineHeight: 20,
-    marginBottom: 12,
-  },
-  selectedBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#10b981',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    alignSelf: 'flex-start',
-    marginTop: 8,
-  },
-  selectedText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
-    marginLeft: 6,
-  },
-  continueButton: {
-    backgroundColor: '#2563eb',
-    borderRadius: 8,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  continueButtonDisabled: {
-    opacity: 0.6,
-  },
-  continueButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    marginRight: 8,
-  },
-  switchNote: {
-    textAlign: 'center',
-    color: '#6b7280',
-    fontSize: 13,
-    lineHeight: 20,
-  },
+  safeArea: { flex: 1 },
+  scrollContent: { flexGrow: 1 },
+  content: { width: '100%', maxWidth: Layout.pageWidth, alignSelf: 'center', flex: 1, paddingHorizontal: Layout.pageGutter, paddingVertical: 24, gap: 18 },
+  webContent: { paddingHorizontal: 32, paddingVertical: 36 },
+  backButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start' },
+  backText: { fontSize: 14, fontWeight: '700' },
+  header: { gap: 7, marginBottom: 4 },
+  eyebrow: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
+  title: { fontSize: 30, lineHeight: 38, fontWeight: '800' },
+  subtitle: { fontSize: 15, lineHeight: 22 },
+  serviceList: { gap: 12 },
+  webServiceList: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
+  serviceCard: { minHeight: 214, borderWidth: 1.5, borderRadius: Layout.radius.card, padding: 20, gap: 10 },
+  serviceIcon: { width: 54, height: 54, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
+  serviceTitle: { fontSize: 18, fontWeight: '700' },
+  serviceDescription: { fontSize: 14, lineHeight: 21 },
+  cardFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto' },
+  selectLabel: { fontSize: 13, fontWeight: '700' },
+  continueButton: { minHeight: 52, borderRadius: Layout.radius.control, paddingHorizontal: 20, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 2 },
+  continueButtonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  switchNote: { textAlign: 'center', fontSize: 13, lineHeight: 20 },
 });

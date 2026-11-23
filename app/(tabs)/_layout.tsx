@@ -1,11 +1,12 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { Platform } from 'react-native';
+import { Platform, useWindowDimensions } from 'react-native';
 
 import { HapticTab } from '@/components/HapticTab';
 import { IconSymbol } from '@/components/ui/IconSymbol';
 import TabBarBackground from '@/components/ui/TabBarBackground';
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useAuthContext } from '@/providers/AuthProvider';
 
@@ -34,15 +35,21 @@ export default function TabLayout() {
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
   const { role } = useAuthContext();
+  const { width } = useWindowDimensions();
+  const isWideWeb = Platform.OS === 'web' && width >= Layout.desktopBreakpoint;
   const currentRole: Role = (role ?? 'parent') as Role;
 
   const visibleTabs = VISIBLE_TABS[currentRole];
 
   return (
     <Tabs
+      tabBarPosition={isWideWeb ? 'left' : 'bottom'}
+      tabBarVariant={isWideWeb ? 'material' : undefined}
       screenOptions={{
         tabBarActiveTintColor: theme.tint,
         tabBarInactiveTintColor: theme.tabIconDefault,
+        tabBarLabelPosition: isWideWeb ? 'beside-icon' : 'below-icon',
+        tabBarLabelStyle: { fontSize: 12, fontWeight: '600' },
         headerShown: false,
         tabBarButton: HapticTab as any,
         tabBarBackground: TabBarBackground,
@@ -50,17 +57,29 @@ export default function TabLayout() {
           ios: {
             position: 'absolute',
             backgroundColor: theme.background,
-            borderTopColor: theme.icon,
+            borderTopColor: theme.border,
+            paddingTop: 6,
           },
           android: {
             backgroundColor: theme.background,
-            borderTopColor: theme.icon,
+            borderTopColor: theme.border,
+            elevation: 10,
           },
-          web: {
-            backgroundColor: theme.background,
-            borderTopColor: theme.icon,
-            borderTopWidth: 1,
-          },
+          web: isWideWeb
+            ? {
+                width: 232,
+                backgroundColor: theme.surface,
+                borderRightColor: theme.border,
+                borderRightWidth: 1,
+                borderTopWidth: 0,
+                paddingTop: 18,
+              }
+            : {
+                backgroundColor: theme.surface,
+                borderTopColor: theme.border,
+                borderTopWidth: 1,
+                paddingTop: 6,
+              },
         }),
       }}>
       {visibleTabs.map((name) => {
@@ -74,7 +93,7 @@ export default function TabLayout() {
               tabBarIcon: config.icon
                 ? ({ color }) => (
                     <IconSymbol
-                      size={28}
+                      size={isWideWeb ? 22 : 24}
                       name={config.icon!}
                       color={typeof color === 'string' ? color : theme.tint}
                     />

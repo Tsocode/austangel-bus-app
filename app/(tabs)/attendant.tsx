@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SettingsButton } from '@/components/ui/SettingsButton';
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useAuthContext } from '@/providers/AuthProvider';
 import { Checkin, CheckinType } from '@/models/checkin';
@@ -115,13 +116,13 @@ export default function AttendantScreen() {
           </Text>
           {errorMessage ? <Text accessibilityRole="alert" style={styles.error}>{errorMessage}</Text> : null}
 
-          {bus ? <View style={[styles.section, { backgroundColor: colorScheme === 'dark' ? '#111827' : '#fff', borderColor: colorScheme === 'dark' ? '#1f2937' : '#e5e7eb' }]}>
+          {bus ? <View style={[styles.section, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <Text style={[styles.sectionTitle, { color: theme.text }]}>Assigned student roster</Text>
             <TextInput
               placeholder="Search student"
               value={filter}
               onChangeText={setFilter}
-              style={[styles.input, { backgroundColor: colorScheme === 'dark' ? '#0b1220' : '#f8fafc', borderColor: colorScheme === 'dark' ? '#374151' : '#d0d5dd', color: theme.text }]}
+              style={[styles.input, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
               placeholderTextColor={theme.icon}
             />
             <TextInput
@@ -129,14 +130,14 @@ export default function AttendantScreen() {
               value={note}
               onChangeText={setNote}
               maxLength={500}
-              style={[styles.input, { backgroundColor: colorScheme === 'dark' ? '#0b1220' : '#f8fafc', borderColor: colorScheme === 'dark' ? '#374151' : '#d0d5dd', color: theme.text }]}
+              style={[styles.input, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
               placeholderTextColor={theme.icon}
             />
             {roster.length === 0 ? <Text style={[styles.empty, { color: theme.icon }]}>No students are assigned to this bus. Their parent account needs to set the child&apos;s defaultBusId.</Text> : null}
             {filteredRoster.map((student) => {
               const checkin = latestStatus.get(student.id);
               const statusLabel = !checkin ? 'Expected' : checkin.type === 'boarded' ? 'On bus' : 'Dropped off';
-              return <View key={`${student.parentId}/${student.id}`} style={[styles.row, { borderBottomColor: colorScheme === 'dark' ? '#374151' : '#e5e7eb' }]}>
+              return <View key={`${student.parentId}/${student.id}`} style={[styles.row, { borderBottomColor: theme.border }]}>
                 <View style={styles.studentDetails}>
                   <Text style={[styles.studentName, { color: theme.text }]}>{student.displayName}</Text>
                   <Text style={[styles.studentStatus, { color: theme.icon }]}>{statusLabel}</Text>
@@ -156,7 +157,7 @@ export default function AttendantScreen() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
-  container: { flexGrow: 1, padding: 18, gap: 14 },
+  container: { width: '100%', alignSelf: 'center', maxWidth: 1000, flexGrow: 1, paddingHorizontal: Layout.pageGutter, paddingTop: 88, paddingBottom: 36, gap: 14 },
   heading: { fontSize: 23, fontWeight: '700' },
   subtitle: { fontSize: 14, lineHeight: 20 },
   section: { borderWidth: 1, borderRadius: 16, padding: 15, gap: 12 },

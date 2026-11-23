@@ -16,7 +16,14 @@ npm install
 cp .env.example .env
 ```
 
-Edit `.env` and set the Firebase `EXPO_PUBLIC_FIREBASE_*` values. Set `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` for Android's native Google map tiles. The key is included in the native app binary, so restrict it in Google Cloud Console to the Android application ID (`com.tsocode.austangel`) and Maps SDK for Android. iOS uses the platform's default Apple map provider in the school tracking screen; the Google key is not used there. The web tracking screen has no interactive map.
+Edit `.env` and set the Firebase `EXPO_PUBLIC_FIREBASE_*` values. Use separate Google Maps keys for each client:
+
+- `EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY`: restrict to the Android package and Maps SDK for Android.
+- `EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY`: restrict to the iOS bundle ID and Maps SDK for iOS.
+- `EXPO_PUBLIC_GOOGLE_MAPS_WEB_API_KEY`: restrict to the web app's HTTP referrers and the Maps Embed API.
+- `EXPO_PUBLIC_GOOGLE_PLACES_API_KEY`: enable Places API (New) and apply suitable client restrictions.
+
+The native Maps keys are included in app builds. The web tracking screen uses the web key when configured and otherwise falls back to OpenStreetMap. Restart Expo after changing `.env`; native Maps key changes also require a new native build.
 
 Do not commit `.env`, `.env.local`, Stripe secret keys, or Firebase service-account credentials. The repository's `.env.local` files are ignored by Git.
 

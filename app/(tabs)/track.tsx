@@ -1,7 +1,10 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { Platform } from 'react-native';
+import { Linking, Platform, Share } from 'react-native';
+import * as Location from 'expo-location';
+import { get, ref, set, update } from 'firebase/database';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   DimensionValue,
   Modal,
@@ -37,6 +40,7 @@ let LatLng: any = null;
 let Marker: any = null;
 let MarkerAnimated: any = null;
 let Polyline: any = null;
+let GoogleMapsProvider: any = null;
 
 if (shouldLoadMaps) {
   try {
@@ -48,6 +52,7 @@ if (shouldLoadMaps) {
     Marker = mapsModule.Marker;
     MarkerAnimated = mapsModule.MarkerAnimated;
     Polyline = mapsModule.Polyline;
+    GoogleMapsProvider = mapsModule.PROVIDER_GOOGLE;
   } catch (e) {
     console.warn('Failed to load react-native-maps (this is OK on web):', e);
     // On web, these will stay as null, and we just won't render the map
@@ -57,7 +62,9 @@ if (shouldLoadMaps) {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { SettingsButton } from '@/components/ui/SettingsButton';
+import { LocationAutocomplete, PlaceResult } from '@/components/LocationAutocomplete';
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { BANANA_TO_AKUTE_ROUTE_POINTS, DEFAULT_LOCATION, DEFAULT_ROUTE_POINTS } from '@/constants/geo';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { Bus } from '@/models/bus';
@@ -66,6 +73,7 @@ import { useAuthContext } from '@/providers/AuthProvider';
 import { getBus, listBuses, listBusesForParent, listBusesForSchoolStaff, updateBusDriver } from '@/services/firestore/buses';
 import { getRoute } from '@/services/firestore/routes';
 import { LiveLocation, subscribeToLiveLocation, updateLiveLocation } from '@/services/realtime/locations';
+import { realtimeDb } from '@/services/firebase';
 
 type Coordinate = { latitude: number; longitude: number };
 
@@ -193,17 +201,17 @@ export default function TrackScreen() {
   const theme = Colors[colorScheme];
   const palette = {
     screenBg: theme.background,
-    cardBg: isDark ? '#111827' : '#fff',
-    cardBorder: isDark ? '#1f2937' : '#dbeafe',
-    textStrong: isDark ? '#f8fafc' : '#0f172a',
-    textMuted: isDark ? '#94a3b8' : '#1f2937',
-    textSubtle: isDark ? '#94a3b8' : '#475569',
-    bannerBg: isDark ? '#1e293b' : '#1d4ed8',
+    cardBg: theme.surface,
+    cardBorder: theme.border,
+    textStrong: theme.text,
+    textMuted: theme.text,
+    textSubtle: theme.icon,
+    bannerBg: theme.tint,
     bannerText: '#fff',
-    inputBg: isDark ? '#0b1220' : '#f8fafc',
-    inputBorder: isDark ? '#1f2937' : '#d0d5dd',
-    controlBg: isDark ? '#0b1220' : '#fff',
-    controlBorder: isDark ? '#1f2937' : '#e5e7eb',
+    inputBg: theme.surface,
+    inputBorder: theme.border,
+    controlBg: theme.surface,
+    controlBorder: theme.border,
     ghostText: theme.tint,
   };
   const [buses, setBuses] = useState<Bus[]>([]);
@@ -232,6 +240,14 @@ export default function TrackScreen() {
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [currentSpeed, setCurrentSpeed] = useState<number | null>(null);
+  const [clockNow, setClockNow] = useState(Date.now());
+  const [destinationSearch, setDestinationSearch] = useState('');
+  const [safetyTracking, setSafetyTracking] = useState(false);
+  const [locationDenied, setLocationDenied] = useState(false);
+  const [safetyLocation, setSafetyLocation] = useState<Location.LocationObject | null>(null);
+  const [safetyRefreshing, setSafetyRefreshing] = useState(false);
+  const safetyWatcher = useRef<Location.LocationSubscription | null>(null);
+  const safetyTripId = profile?.id ?? selectedBusId ?? 'guest';
   const mapRef = useRef<MapViewInstance | null>(null);
   const simulationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const simulationStep = useRef(0);
@@ -270,7 +286,12 @@ export default function TrackScreen() {
   const simulationPath = useMemo(() => routePolyline, [routePolyline]);
 
   const lastUpdatedAt = liveLocation?.updatedAt ?? null;
-  const isStale = lastUpdatedAt ? Date.now() - lastUpdatedAt > 2 * 60 * 1000 : false;
+  const isStale = lastUpdatedAt ? clockNow - lastUpdatedAt > 2 * 60 * 1000 : false;
+
+  useEffect(() => {
+    const timer = setInterval(() => setClockNow(Date.now()), 15_000);
+    return () => clearInterval(timer);
+  }, []);
   const etaSeconds = useMemo(() => {
     if (!simulationPath.length) return null;
     const baseDuration = routeDurationSeconds ?? Math.max(1, simulationPath.length * 2.5);
@@ -620,6 +641,72 @@ export default function TrackScreen() {
     }
   };
 
+  const handleDestinationSelect = async (place: PlaceResult) => {
+    const destination = { latitude: place.latitude, longitude: place.longitude };
+    setDestinationSearch(place.address);
+    setEndQuery(place.address);
+    setEndCoord(destination);
+    setFollowBus(false);
+    try {
+      const { polyline, durationSeconds } = await fetchRoutePolyline(currentLocation, destination);
+      setRoutePolyline(polyline);
+      setRouteDurationSeconds(durationSeconds);
+      if (mapRef.current) mapRef.current.fitToCoordinates([currentLocation, destination], {
+        edgePadding: { top: 100, right: 60, bottom: 130, left: 60 }, animated: true,
+      });
+    } catch (error) {
+      console.warn('Could not calculate destination route', error);
+      setRoutePolyline([currentLocation, destination]);
+    }
+  };
+
+  const publishSafetyPosition = async (position: Location.LocationObject) => {
+    setSafetyLocation(position);
+    await set(ref(realtimeDb, `activeTravelTrips/${safetyTripId}`), {
+      tripId: safetyTripId, userId: profile?.id ?? null, active: true,
+      latitude: position.coords.latitude, longitude: position.coords.longitude,
+      speed: position.coords.speed, heading: position.coords.heading,
+      accuracy: position.coords.accuracy, timestamp: position.timestamp,
+      destination: endCoord ? { ...endCoord, address: endQuery } : null,
+    });
+  };
+  const startSafetyTracking = async () => {
+    try {
+      const permission = await Location.requestForegroundPermissionsAsync();
+      if (!permission.granted) { setLocationDenied(true); return; }
+      setLocationDenied(false);
+      const initial = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      await publishSafetyPosition(initial);
+      safetyWatcher.current = await Location.watchPositionAsync({
+        accuracy: Location.Accuracy.High, distanceInterval: 5, timeInterval: 3000,
+      }, (position) => { void publishSafetyPosition(position).catch((error) => console.warn('Could not publish safety location', error)); });
+      setSafetyTracking(true);
+      Alert.alert('Safety tracking started', 'Your live location is now being shared for this trip.');
+    } catch (error) { Alert.alert('Tracking unavailable', error instanceof Error ? error.message : 'Unable to start location tracking.'); }
+  };
+  const stopSafetyTracking = async () => {
+    safetyWatcher.current?.remove(); safetyWatcher.current = null; setSafetyTracking(false);
+    try { await update(ref(realtimeDb, `activeTravelTrips/${safetyTripId}`), { active: false, stoppedAt: Date.now() }); }
+    catch (error) { console.warn('Could not mark safety trip stopped', error); }
+  };
+  const refreshSafetyLocation = async () => {
+    setSafetyRefreshing(true);
+    try {
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      setSafetyLocation(position);
+      const snapshot = await get(ref(realtimeDb, `activeTravelTrips/${safetyTripId}`));
+      if (safetyTracking) await publishSafetyPosition(position);
+      Alert.alert('Location refreshed', `GPS ±${Math.round(position.coords.accuracy ?? 0)}m${snapshot.exists() ? ' · trip data synced' : ''}`);
+    } catch (error) { Alert.alert('Refresh failed', error instanceof Error ? error.message : 'Could not refresh GPS.'); }
+    finally { setSafetyRefreshing(false); }
+  };
+  useEffect(() => () => { safetyWatcher.current?.remove(); }, []);
+  const sendSos = () => Alert.alert('Emergency alert', 'Send an SOS alert to your trip contacts?', [
+    { text: 'Cancel', style: 'cancel' }, { text: 'Send SOS', style: 'destructive', onPress: () => {
+      void set(ref(realtimeDb, `activeTravelTrips/${safetyTripId}/sos`), { active: true, timestamp: Date.now(), latitude: safetyLocation?.coords.latitude ?? null, longitude: safetyLocation?.coords.longitude ?? null }).then(() => Alert.alert('SOS sent', 'Your trip alert was recorded.')).catch(() => Alert.alert('SOS unavailable', 'The alert could not be recorded.'));
+    } },
+  ]);
+
   const handleResetToFallback = () => {
     setRoute(ROUTE_PLACEHOLDER);
     setRouteStops([]);
@@ -654,247 +741,6 @@ export default function TrackScreen() {
       console.error('Driver update failed', error);
       Alert.alert('Update failed', 'We could not update the driver name.');
     }
-  };
-
-  const stopTrip = (message?: string) => {
-    if (simulationTimer.current) {
-      clearTimeout(simulationTimer.current);
-      simulationTimer.current = null;
-    }
-    simulationStep.current = 0;
-    visitedStopsRef.current = new Set();
-    isSimulatingRef.current = false;
-    setCurrentIndex(0);
-    setCurrentStop(null);
-    setPauseUntil(null);
-    pauseUntilRef.current = null;
-    setIsSimulating(false);
-    if (message) {
-      Alert.alert('Trip ended', message);
-    }
-  };
-
-  const handleNextStop = () => {
-    if (!isSimulatingRef.current || !simulationPath.length) {
-      return;
-    }
-    const upcoming = stopScheduleRef.current.find((stop) => stop.index > simulationStep.current);
-    if (!upcoming) {
-      stopTrip('Trip complete. Ready for the next run.');
-      return;
-    }
-    if (simulationTimer.current) {
-      clearTimeout(simulationTimer.current);
-      simulationTimer.current = null;
-    }
-    pauseUntilRef.current = null;
-    setPauseUntil(null);
-    setCurrentStop(null);
-    simulationStep.current = Math.min(upcoming.index, simulationPath.length - 1);
-    setCurrentIndex(simulationStep.current);
-    const point = simulationPath[simulationStep.current];
-    const previous = simulationPath[Math.max(0, simulationStep.current - 1)];
-    const nextLocation = {
-      latitude: point.latitude,
-      longitude: point.longitude,
-      updatedAt: Date.now(),
-      speed: 14,
-      heading: calculateHeading(previous, point),
-    };
-    setLiveLocation(nextLocation);
-    busCoordinate.current.setValue({
-      latitude: point.latitude,
-      longitude: point.longitude,
-      latitudeDelta: 0,
-      longitudeDelta: 0,
-    });
-    updateLiveLocation(selectedBusId ?? 'unknown', nextLocation).catch((err) => {
-      console.warn('Next stop publish skipped', err);
-    });
-    simulationTimer.current = setTimeout(() => {
-      const nextIndex = Math.min(simulationStep.current + 1, simulationPath.length - 1);
-      if (nextIndex === simulationStep.current) {
-        stopTrip('Trip complete. Ready for the next run.');
-        return;
-      }
-      const pointNext = simulationPath[nextIndex];
-      const prevNext = simulationPath[Math.max(0, nextIndex - 1)];
-      const durationMs =
-        segmentDurationsRef.current[Math.max(0, nextIndex - 1)] ?? 1000;
-      const busSpeed = calculateBusSpeed(nextIndex, simulationPath.length);
-      const liveNext = {
-        latitude: pointNext.latitude,
-        longitude: pointNext.longitude,
-        updatedAt: Date.now(),
-        speed: busSpeed,
-        heading: calculateHeading(prevNext, pointNext),
-      };
-      setCurrentSpeed(busSpeed);
-      setLiveLocation(liveNext);
-      busCoordinate.current.timing({
-        latitude: pointNext.latitude,
-        longitude: pointNext.longitude,
-        duration: durationMs,
-        useNativeDriver: false,
-      } as Parameters<typeof busCoordinate.current.timing>[0]).start();
-      simulationStep.current = nextIndex;
-      setCurrentIndex(nextIndex);
-    }, 0);
-  };
-
-  const handleStartTrip = async () => {
-    if (!selectedBusId) {
-      Alert.alert('Select a bus', 'Choose a bus to start the trip.');
-      return;
-    }
-
-    if (isSimulating) {
-      Alert.alert('End trip?', 'Stop publishing live updates for this bus?', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'End trip', style: 'destructive', onPress: () => stopTrip('Trip updates stopped.') },
-      ]);
-      return;
-    }
-
-    if (!routePolyline.length) {
-      Alert.alert('Build a route', 'Enter a start and destination before starting a trip.');
-      return;
-    }
-
-    const targetPoint = routePolyline[0] ?? { ...DEFAULT_LOCATION };
-    if (!stopScheduleRef.current.length) {
-      buildStopSchedule(routePolyline);
-    }
-
-    Alert.alert(
-      'Start trip?',
-      `This will publish live updates for ${selectedBus?.nickname ?? 'the bus'}.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Start trip',
-          onPress: async () => {
-            if (simulationTimer.current) {
-              clearTimeout(simulationTimer.current);
-            }
-            simulationStep.current = 0;
-            isSimulatingRef.current = true;
-            setFollowBus(true);
-            setIsSimulating(true);
-            setCurrentIndex(0);
-            visitedStopsRef.current = new Set();
-            try {
-              const initialSpeed = calculateBusSpeed(0, simulationPath.length);
-              await updateLiveLocation(selectedBusId, {
-                latitude: targetPoint.latitude,
-                longitude: targetPoint.longitude,
-                updatedAt: Date.now(),
-                speed: initialSpeed,
-                heading: 90,
-              });
-              setCurrentSpeed(initialSpeed);
-              setTrailCoords([{ latitude: targetPoint.latitude, longitude: targetPoint.longitude }]);
-              setLiveLocation({
-                latitude: targetPoint.latitude,
-                longitude: targetPoint.longitude,
-                updatedAt: Date.now(),
-                speed: initialSpeed,
-                heading: 90,
-              });
-              Alert.alert('Trip started', 'Parents will see the bus move shortly.');
-              const points = simulationPath;
-              if (!points.length) {
-                stopTrip('No route points available.');
-                return;
-              }
-              const baseDurationSeconds = routeDurationSeconds ?? points.length * 2.5;
-              const totalDurationMs = Math.max(
-                1000,
-                baseDurationSeconds * SIMULATION_SPEED_MULTIPLIER * 1000
-              );
-              segmentDurationsRef.current = buildSegmentDurations(points, totalDurationMs);
-              busCoordinate.current.setValue({
-                latitude: targetPoint.latitude,
-                longitude: targetPoint.longitude,
-                latitudeDelta: 0,
-                longitudeDelta: 0,
-              });
-
-              const runSegment = (nextIndex: number) => {
-                if (!isSimulatingRef.current) {
-                  return;
-                }
-                if (nextIndex >= points.length) {
-                  stopTrip('Trip complete. Ready for the next run.');
-                  return;
-                }
-                const previous = points[Math.max(0, nextIndex - 1)];
-                const point = points[nextIndex];
-                const durationMs =
-                  segmentDurationsRef.current[Math.max(0, nextIndex - 1)] ?? 1000;
-                const busSpeed = calculateBusSpeed(nextIndex, points.length);
-                const nextLocation = {
-                  latitude: point.latitude,
-                  longitude: point.longitude,
-                  updatedAt: Date.now(),
-                  speed: busSpeed,
-                  heading: calculateHeading(previous, point),
-                };
-                setCurrentSpeed(busSpeed);
-                setLiveLocation(nextLocation);
-                busCoordinate.current
-                  .timing({
-                    latitude: point.latitude,
-                    longitude: point.longitude,
-                    duration: durationMs,
-                    useNativeDriver: false,
-                  } as Parameters<typeof busCoordinate.current.timing>[0])
-                  .start();
-                simulationStep.current = nextIndex;
-                setCurrentIndex(nextIndex);
-                const stopMatch = stopScheduleRef.current.find(
-                  (stop) => stop.index === nextIndex && !visitedStopsRef.current.has(stop.index)
-                );
-                if (stopMatch) {
-                  visitedStopsRef.current.add(stopMatch.index);
-                  const dwellMs = stopMatch.dwellSeconds * 1000;
-                  pauseUntilRef.current = Date.now() + dwellMs;
-                  setPauseUntil(pauseUntilRef.current);
-                  setCurrentStop(stopMatch.stop);
-                  simulationTimer.current = setTimeout(() => {
-                    setPauseUntil(null);
-                    pauseUntilRef.current = null;
-                    setCurrentStop(null);
-                    runSegment(nextIndex + 1);
-                  }, dwellMs);
-                  return;
-                }
-                simulationTimer.current = setTimeout(() => {
-                  runSegment(nextIndex + 1);
-                }, durationMs);
-                updateLiveLocation(selectedBusId, nextLocation).catch((err) => {
-                  console.warn('Simulation publish skipped', err);
-                });
-              };
-
-              if (points.length > 1) {
-                runSegment(1);
-              } else {
-                stopTrip('Not enough route points to simulate.');
-              }
-            } catch (error: any) {
-              console.error('Simulation failed', error);
-              const message =
-                error?.code === 'permission-denied'
-                  ? 'Missing permission to publish location. Check Firestore/Realtime rules.'
-                  : 'Unable to publish trip location.';
-              stopTrip();
-              Alert.alert('Trip failed', message);
-            }
-          },
-        },
-      ]
-    );
   };
 
   const zoomMap = (factor: number) => {
@@ -990,6 +836,12 @@ export default function TrackScreen() {
       <MapView
         ref={mapRef}
         style={style}
+        onPanDrag={() => setFollowBus(false)}
+        provider={(Platform.OS === 'ios'
+          ? process.env.EXPO_PUBLIC_GOOGLE_MAPS_IOS_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
+          : process.env.EXPO_PUBLIC_GOOGLE_MAPS_ANDROID_API_KEY || process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY)
+          ? GoogleMapsProvider
+          : undefined}
         initialRegion={{
           latitude: currentLocation.latitude,
           longitude: currentLocation.longitude,
@@ -1151,15 +1003,6 @@ export default function TrackScreen() {
               <Text style={[styles.legendText, { color: palette.textMuted }]}>Bus</Text>
             </View>
           </View>
-          {isSimulating ? (
-            <Pressable
-              style={[styles.fullscreenNextButton, { backgroundColor: theme.tint }]}
-              onPress={handleNextStop}
-              accessibilityRole="button"
-              accessibilityLabel="Jump to next stop">
-              <Text style={styles.fullscreenNextButtonText}>Next stop</Text>
-            </Pressable>
-          ) : null}
           {renderMapControls(true)}
         </SafeAreaView>
       </Modal>
@@ -1167,11 +1010,13 @@ export default function TrackScreen() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
         <ScrollView
           style={[styles.screen, { backgroundColor: palette.screenBg }]}
-          contentContainerStyle={{ paddingBottom: 32 }}
+          contentContainerStyle={{ paddingTop: 72, paddingBottom: 32 }}
           keyboardShouldPersistTaps="handled">
         <View style={[styles.banner, { backgroundColor: palette.bannerBg }]}>
           <Text style={[styles.bannerText, { color: palette.bannerText }]}>
-            Your child&apos;s bus is being monitored in real time
+            {liveLocation
+              ? isStale ? 'Bus location is delayed. Check the last update below.' : 'Showing the latest bus location.'
+              : 'Waiting for the driver to share a bus location.'}
           </Text>
         </View>
 
@@ -1186,7 +1031,7 @@ export default function TrackScreen() {
                 style={[
                   styles.busButton,
                   isActive ? styles.busButtonActive : styles.busButtonInactive,
-                  !isActive && isDark ? { backgroundColor: '#1f2937' } : null,
+                  { backgroundColor: isActive ? theme.tint : theme.surfaceMuted, borderColor: isActive ? theme.tint : theme.border },
                 ]}
                 onPress={() => handleSelectBus(bus.id)}>
                 <Text
@@ -1202,6 +1047,10 @@ export default function TrackScreen() {
         </View>
       </View>
 
+      <View style={{ zIndex: 12, marginBottom: 12 }}>
+        <LocationAutocomplete placeholder="Search destination or location" value={destinationSearch}
+          onChangeText={setDestinationSearch} onSelect={handleDestinationSelect} />
+      </View>
       <View style={[styles.mapCard, { borderColor: palette.cardBorder }]}>
         {isMapFullscreen ? (
           <View style={styles.mapPlaceholder}>
@@ -1252,22 +1101,9 @@ export default function TrackScreen() {
           {selectedBus?.nickname ?? 'Austangel Bus'} - {route?.name ?? 'Route'}
         </Text>
         <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>🕒</Text>
-          <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            ETA:{' '}
-            {etaSeconds && isSimulating ? `${formatArrival(etaSeconds)} (${Math.ceil(etaSeconds / 60)} min)` : '—'}
-          </Text>
-        </View>
-        <View style={styles.infoRow}>
           <Text style={styles.infoIcon}>📍</Text>
           <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            {currentStop ? `At: ${currentStop.name}` : liveLocation ? 'Live bus GPS' : 'Waiting for bus GPS'}
-          </Text>
-        </View>
-        <View style={styles.infoRow}>
-          <Text style={styles.infoIcon}>🛣️</Text>
-          <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            Next: {routePoints[Math.min(currentIndex + 1, routePoints.length - 1)]?.name ?? '—'}
+            {liveLocation ? 'Live bus GPS received' : 'Waiting for bus GPS'}
           </Text>
         </View>
         <View style={styles.infoRow}>
@@ -1313,13 +1149,12 @@ export default function TrackScreen() {
         <View style={styles.infoRow}>
           <Text style={styles.infoIcon}>📍</Text>
           <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            {currentStop ? `At: ${currentStop.name}` : 'En route'}
+            {routePoints.length ? `Assigned route has ${routePoints.length} stops` : 'No assigned route stops'}
           </Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoIcon}>🛣️</Text>
           <Text style={[styles.infoText, { color: palette.textMuted }]}>
-            Next: {routePoints[Math.min(currentIndex + 1, routePoints.length - 1)]?.name ?? '—'}
           </Text>
         </View>
         <View style={styles.infoRow}>
@@ -1330,60 +1165,6 @@ export default function TrackScreen() {
           </Text>
         </View>
 
-        {/* =========================================== */}
-        {/* DEMO CONTROLS - Remove before production   */}
-        {/* =========================================== */}
-        {isSimulating && (
-          <View style={[styles.demoCard, { backgroundColor: isDark ? '#7c3aed25' : '#ede9fe', borderColor: '#a78bfa' }]}>
-            <Text style={[styles.demoTitle, { color: '#6d28d9' }]}>⚙️ Demo Controls</Text>
-            <Text style={[styles.demoSubtitle, { color: '#7c3aed' }]}>Testing & Timing</Text>
-
-            {pauseUntil ? (
-              <View style={styles.demoRow}>
-                <Text style={[styles.demoLabel, { color: '#6d28d9' }]}>⏸️ Bus Stopped:</Text>
-                <Text style={[styles.demoValue, { color: '#7c3aed' }]}>
-                  {currentStop?.name} • {Math.max(0, Math.ceil((pauseUntil - Date.now()) / 1000))}s remaining
-                </Text>
-              </View>
-            ) : null}
-
-            <View style={styles.demoBtnRow}>
-              <Pressable
-                style={[styles.demoBtn, { backgroundColor: '#7c3aed' }]}
-                onPress={handleNextStop}>
-                <MaterialIcons name="skip-next" size={16} color="#fff" />
-                <Text style={styles.demoBtnText}>Skip Stop</Text>
-              </Pressable>
-
-              <Pressable
-                style={[styles.demoBtn, { backgroundColor: '#06b6d4' }]}
-                onPress={() => {
-                  if (simulationTimer.current) clearTimeout(simulationTimer.current);
-                  const nextIndex = Math.min(simulationStep.current + 10, simulationPath.length - 1);
-                  if (nextIndex < simulationPath.length) {
-                    const point = simulationPath[nextIndex];
-                    setCurrentIndex(nextIndex);
-                    busCoordinate.current.timing({
-                      latitude: point.latitude,
-                      longitude: point.longitude,
-                      duration: 500,
-                      useNativeDriver: false,
-                    } as Parameters<typeof busCoordinate.current.timing>[0]).start();
-                  }
-                }}>
-                <MaterialIcons name="fast-forward" size={16} color="#fff" />
-                <Text style={styles.demoBtnText}>Fast Forward</Text>
-              </Pressable>
-            </View>
-
-            <Text style={[styles.demoHint, { color: '#7c3aed' }]}>
-              💡 Tip: These controls are for demo testing only. Remove before app launch.
-            </Text>
-          </View>
-        )}
-        {/* =========================================== */}
-        {/* END DEMO CONTROLS                          */}
-        {/* =========================================== */}
         <View style={styles.routeForm}>
           <Text style={[styles.sectionLabel, { color: palette.textStrong }]}>Plan route</Text>
           <TextInput
@@ -1451,6 +1232,34 @@ export default function TrackScreen() {
 
         {role === 'driver' ? <Text style={[styles.infoText, { color: palette.textMuted }]}>Use the Driver tab to start a trip; it shares the device’s live GPS instead of simulating a route.</Text> : null}
       </View>
+      <View style={[styles.safetyCard, { backgroundColor: palette.cardBg, borderColor: palette.cardBorder }]}>
+        <View style={styles.safetyHeader}>
+          <View style={[styles.statusDot, { backgroundColor: safetyTracking ? '#16a34a' : '#d97706' }]} />
+          <Text style={[styles.safetyStatus, { color: palette.textStrong }]}>{safetyTracking ? 'LIVE TRACKING' : 'TRACKING PAUSED'}</Text>
+          <Text style={[styles.accuracy, { color: palette.textMuted }]}>{safetyLocation?.coords.accuracy != null ? `±${Math.round(safetyLocation.coords.accuracy)}m` : 'GPS accuracy unavailable'}</Text>
+        </View>
+        {locationDenied ? <View style={styles.permissionBanner}><Text style={styles.permissionText}>Location permission is needed to share your trip location.</Text><Pressable onPress={() => void Linking.openSettings()}><Text style={styles.settingsLink}>Open Settings</Text></Pressable></View> : null}
+        <Pressable style={[styles.safetyPrimary, { backgroundColor: safetyTracking ? '#dc2626' : '#16a34a' }]} onPress={() => void (safetyTracking ? stopSafetyTracking() : startSafetyTracking())}>
+          <MaterialIcons name={safetyTracking ? 'stop' : 'my-location'} size={20} color="#fff" />
+          <Text style={styles.safetyPrimaryText}>{safetyTracking ? 'Stop Tracking' : 'Start Safety Tracking'}</Text>
+        </Pressable>
+        <View style={styles.safetyActions}>
+          <Pressable style={styles.safetyAction} onPress={() => void refreshSafetyLocation()} disabled={safetyRefreshing}>
+            {safetyRefreshing ? <ActivityIndicator color="#2563eb" /> : <MaterialIcons name="refresh" size={19} color="#2563eb" />}
+            <Text style={styles.safetyActionText}>{safetyRefreshing ? 'Refreshing…' : 'Refresh'}</Text>
+          </Pressable>
+          <Pressable style={styles.safetyAction} onPress={() => void Share.share({ message: `Follow my Austangel trip: ${safetyTripId}` })}>
+            <MaterialIcons name="share" size={19} color="#2563eb" /><Text style={styles.safetyActionText}>Share Live Trip</Text>
+          </Pressable>
+          <Pressable style={[styles.safetyAction, styles.sosAction]} onPress={sendSos}>
+            <MaterialIcons name="emergency" size={19} color="#b91c1c" /><Text style={[styles.safetyActionText, { color: '#b91c1c' }]}>SOS</Text>
+          </Pressable>
+        </View>
+        <Text style={[styles.safetyUpdated, { color: palette.textMuted }]}>
+          {safetyLocation ? `Updated ${new Date(safetyLocation.timestamp).toLocaleTimeString()}` : 'Location has not been refreshed'}
+          {endCoord ? ` · Destination: ${endQuery}` : ''}
+        </Text>
+      </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -1488,6 +1297,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#f1f5f9',
   },
   screen: {
+    width: '100%',
+    maxWidth: Layout.pageWidth,
+    alignSelf: 'center',
     flex: 1,
     backgroundColor: '#f1f5f9',
     paddingHorizontal: 16,
@@ -1874,4 +1686,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 8,
   },
+  safetyCard: { marginTop: 14, padding: 16, borderWidth: 1, borderRadius: 18, gap: 12 },
+  safetyHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 28 },
+  statusDot: { width: 10, height: 10, borderRadius: 5 },
+  safetyStatus: { fontSize: 14, fontWeight: '700', flex: 1 },
+  accuracy: { fontSize: 13, fontWeight: '600' },
+  safetyPrimary: { minHeight: 50, borderRadius: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  safetyPrimaryText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  safetyActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  safetyAction: { minHeight: 48, paddingHorizontal: 12, borderRadius: 12, backgroundColor: '#eff6ff', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  sosAction: { backgroundColor: '#fee2e2' },
+  safetyActionText: { color: '#1d4ed8', fontSize: 14, fontWeight: '600' },
+  safetyUpdated: { fontSize: 13 },
+  permissionBanner: { padding: 12, borderRadius: 10, backgroundColor: '#fef3c7', gap: 6 },
+  permissionText: { fontSize: 14, color: '#78350f' },
+  settingsLink: { fontSize: 14, color: '#1d4ed8', fontWeight: '700', textDecorationLine: 'underline' },
 });

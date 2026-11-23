@@ -6,7 +6,6 @@ import * as Linking from 'expo-linking';
 import {
   ActivityIndicator,
   Alert,
-  SafeAreaView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -16,6 +15,8 @@ import {
 import { TravelTrip } from '@/models/travel-trip';
 import { Colors } from '@/constants/Colors';
 import { useColorScheme } from '@/hooks/useColorScheme';
+import { Layout } from '@/constants/Layout';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { createTravelPaymentIntent, getTrip, verifyTravelPayment } from '@/services/firebase-travel';
 
 const stripePublishableKey = process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY;
@@ -161,9 +162,9 @@ function formatAmount(trip: TravelTrip) {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   center: { justifyContent: 'center', alignItems: 'center', padding: 24 },
-  content: { flex: 1, padding: 20 },
-  title: { fontSize: 24, fontWeight: '700', marginBottom: 18 },
-  summary: { borderRadius: 12, padding: 16, gap: 13 },
+  content: { width: '100%', maxWidth: 720, alignSelf: 'center', flex: 1, paddingHorizontal: Layout.pageGutter, paddingVertical: 24, justifyContent: 'center' },
+  title: { fontSize: 26, fontWeight: '800', marginBottom: 20 },
+  summary: { borderRadius: Layout.radius.card, padding: 20, gap: 16 },
   summaryRow: { gap: 6 },
   summaryLabel: { fontSize: 11, opacity: 0.7 },
   summaryValue: { fontSize: 13, fontWeight: '600' },
@@ -171,7 +172,7 @@ const styles = StyleSheet.create({
   totalLabel: { fontSize: 16, fontWeight: '600' },
   totalAmount: { fontSize: 22, fontWeight: '700' },
   secureNote: { fontSize: 12, lineHeight: 18, marginBottom: 18 },
-  payButton: { borderRadius: 10, padding: 15, flexDirection: 'row', gap: 8, justifyContent: 'center', alignItems: 'center' },
+  payButton: { minHeight: 52, borderRadius: Layout.radius.control, padding: 15, flexDirection: 'row', gap: 8, justifyContent: 'center', alignItems: 'center' },
   payButtonText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   message: { textAlign: 'center', lineHeight: 20, marginTop: 12 },
   error: { color: '#dc2626', fontSize: 12, marginBottom: 14 },

@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 import { useAuthContext } from '@/providers/AuthProvider';
 import { SettingsButton } from '@/components/ui/SettingsButton';
@@ -223,7 +224,7 @@ export default function DriverToolsScreen() {
       <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.background }]}>
         <SettingsButton />
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-          <View style={[styles.card, { backgroundColor: colorScheme === 'dark' ? '#111827' : '#fff', borderColor: colorScheme === 'dark' ? '#1f2937' : '#e5e7eb' }]}>
+          <View style={[styles.card, { backgroundColor: theme.surface, borderColor: theme.border }]}>
             <Text style={[styles.heading, { color: theme.text }]}>{isAttendant ? 'Attendant Check-ins' : 'Driver Tools'}</Text>
             {!assignedBus ? (
               <Text style={[styles.description, { color: theme.icon }]}>No school bus is assigned to your profile yet. Ask an administrator to add you to a bus.</Text>
@@ -249,7 +250,7 @@ export default function DriverToolsScreen() {
                 {roster.map((student) => {
                   const lastCheckin = latestStatusByStudent.get(student.id);
                   const statusLabel = !lastCheckin ? 'Expected' : lastCheckin.type === 'boarded' ? 'On bus' : 'Dropped off';
-                  return <View key={`${student.parentId}/${student.id}`} style={[styles.studentRow, { borderBottomColor: colorScheme === 'dark' ? '#374151' : '#e5e7eb' }]}>
+                  return <View key={`${student.parentId}/${student.id}`} style={[styles.studentRow, { borderBottomColor: theme.border }]}>
                     <View style={styles.studentDetails}>
                       <Text style={[styles.studentName, { color: theme.text }]}>{student.displayName}</Text>
                       <Text style={[styles.sectionHint, { color: theme.icon }]}>{statusLabel}</Text>
@@ -260,7 +261,7 @@ export default function DriverToolsScreen() {
                     </View>
                   </View>;
                 })}
-                <TextInput value={note} onChangeText={setNote} placeholder="Optional note for the next check-in" placeholderTextColor={theme.icon} style={[styles.input, { backgroundColor: colorScheme === 'dark' ? '#0b1220' : '#f8fafc', color: theme.text, borderColor: colorScheme === 'dark' ? '#374151' : '#d0d5dd' }]} maxLength={500} />
+                <TextInput value={note} onChangeText={setNote} placeholder="Optional note for the next check-in" placeholderTextColor={theme.icon} style={[styles.input, { backgroundColor: theme.background, color: theme.text, borderColor: theme.border }]} maxLength={500} />
               </View>
             </>}
             {errorMessage ? <Text accessibilityRole="alert" style={styles.error}>{errorMessage}</Text> : null}
@@ -273,7 +274,7 @@ export default function DriverToolsScreen() {
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1 },
-  container: { flexGrow: 1, padding: 20, paddingBottom: 36 },
+  container: { width: '100%', alignSelf: 'center', maxWidth: 1000, flexGrow: 1, paddingHorizontal: Layout.pageGutter, paddingTop: 88, paddingBottom: 36 },
   card: { borderWidth: 1, borderRadius: 18, padding: 20, gap: 22 },
   heading: { fontSize: 24, fontWeight: '700' },
   description: { fontSize: 14, lineHeight: 21 },

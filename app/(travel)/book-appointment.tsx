@@ -3,23 +3,25 @@ import { useRouter } from 'expo-router';
 import * as Location from 'expo-location';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from '@react-navigation/native';
-import { useColorScheme } from '@/hooks/useColorScheme';
 import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import { TravelBookingInput, TravelFareQuote, TravelServiceClass } from '@/models/travel-trip';
 import { createTripRequest, quoteTravelFare } from '@/services/firebase-travel';
+import { LocationAutocomplete, PlaceResult } from '@/components/LocationAutocomplete';
+import { Layout } from '@/constants/Layout';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 const rideClasses: { id: TravelServiceClass; name: string; detail: string }[] = [
   { id: 'standard', name: 'Standard', detail: 'Everyday ride' },
@@ -30,10 +32,13 @@ const rideClasses: { id: TravelServiceClass; name: string; detail: string }[] = 
 export default function BookAppointmentScreen() {
   const router = useRouter();
   const theme = useTheme();
-  const colorScheme = useColorScheme();
   const primaryColor = typeof theme.colors.primary === 'string' ? theme.colors.primary : '#0a7ea4';
+  const { width } = useWindowDimensions();
+  const isWideWeb = Platform.OS === 'web' && width >= Layout.desktopBreakpoint;
   const [pickup, setPickup] = useState('');
   const [dropoff, setDropoff] = useState('');
+  const [pickupPlace, setPickupPlace] = useState<PlaceResult | null>(null);
+  const [dropoffPlace, setDropoffPlace] = useState<PlaceResult | null>(null);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('');
   const [passengerCount, setPassengerCount] = useState('1');
@@ -67,22 +72,22 @@ export default function BookAppointmentScreen() {
     }
 
     const [pickupResult, dropoffResult] = await Promise.all([
-      Location.geocodeAsync(cleanPickup),
-      Location.geocodeAsync(cleanDropoff),
+      pickupPlace ? Promise.resolve([{ latitude: pickupPlace.latitude, longitude: pickupPlace.longitude }]) : Location.geocodeAsync(cleanPickup),
+      dropoffPlace ? Promise.resolve([{ latitude: dropoffPlace.latitude, longitude: dropoffPlace.longitude }]) : Location.geocodeAsync(cleanDropoff),
     ]);
     if (!pickupResult.length || !dropoffResult.length) {
       throw new Error('We could not find one of those addresses. Check the spelling and try again.');
     }
     return {
-      pickupLocation: {
+          pickupLocation: {
         latitude: pickupResult[0].latitude,
         longitude: pickupResult[0].longitude,
-        address: cleanPickup,
+            address: pickupPlace?.address ?? cleanPickup,
       },
       dropoffLocation: {
         latitude: dropoffResult[0].latitude,
         longitude: dropoffResult[0].longitude,
-        address: cleanDropoff,
+            address: dropoffPlace?.address ?? cleanDropoff,
       },
       passengers: count,
       serviceClass,
@@ -138,9 +143,9 @@ export default function BookAppointmentScreen() {
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.select({ ios: 'padding', android: undefined })}>
       <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <Field label="Pickup location" icon="my-location" value={pickup} placeholder="Enter pickup address" onChangeText={(value) => updateInput(() => setPickup(value))} theme={theme} primaryColor={primaryColor} />
-          <Field label="Dropoff location" icon="location-on" value={dropoff} placeholder="Enter destination address" onChangeText={(value) => updateInput(() => setDropoff(value))} theme={theme} primaryColor={primaryColor} />
+        <ScrollView contentContainerStyle={[styles.content, isWideWeb && styles.webContent]} keyboardShouldPersistTaps="handled">
+          <LocationAutocomplete label="Pickup location" placeholder="Search pickup address" value={pickup} onChangeText={(value) => { updateInput(() => { setPickup(value); setPickupPlace(null); }); }} onSelect={(place) => { setPickupPlace(place); setPickup(place.address); updateInput(() => {}); }} />
+          <LocationAutocomplete label="Dropoff location" placeholder="Search destination address" value={dropoff} onChangeText={(value) => { updateInput(() => { setDropoff(value); setDropoffPlace(null); }); }} onSelect={(place) => { setDropoffPlace(place); setDropoff(place.address); updateInput(() => {}); }} />
 
           <View style={styles.row}>
             <View style={{ flex: 1 }}>
@@ -160,7 +165,7 @@ export default function BookAppointmentScreen() {
                 key={item.id}
                 accessibilityRole="radio"
                 accessibilityState={{ selected: serviceClass === item.id }}
-                style={[styles.classCard, { borderColor: serviceClass === item.id ? primaryColor : '#d1d5db' }]}
+                style={[styles.classCard, { borderColor: serviceClass === item.id ? primaryColor : theme.colors.border, backgroundColor: serviceClass === item.id ? theme.colors.background : theme.colors.card }]}
                 onPress={() => updateInput(() => setServiceClass(item.id))}>
                 <Text style={[styles.className, { color: theme.colors.text }]}>{item.name}</Text>
                 <Text style={[styles.classDetail, { color: theme.colors.text }]}>{item.detail}</Text>
@@ -168,7 +173,7 @@ export default function BookAppointmentScreen() {
             ))}
           </View>
 
-          <View style={[styles.quoteCard, { backgroundColor: colorSchemeBackground(colorScheme) }]}>
+          <View style={[styles.quoteCard, { backgroundColor: theme.colors.card, borderColor: theme.colors.border, borderWidth: 1 }]}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.quoteLabel, { color: theme.colors.text }]}>Estimated fare</Text>
               <Text style={[styles.quoteAmount, { color: primaryColor }]}>
@@ -212,7 +217,7 @@ function Field({
   return (
     <View style={styles.field}>
       <Text style={[styles.label, { color: theme.colors.text }]}>{label}</Text>
-      <View style={[styles.inputContainer, { borderColor: '#d1d5db' }]}>
+      <View style={[styles.inputContainer, { borderColor: theme.colors.border, backgroundColor: theme.colors.card }]}>
         <MaterialIcons name={icon} size={19} color={primaryColor} />
         <TextInput
           style={[styles.input, { color: theme.colors.text }]}
@@ -228,13 +233,10 @@ function Field({
   );
 }
 
-function colorSchemeBackground(colorScheme: string | null | undefined) {
-  return colorScheme === 'dark' ? '#1f2937' : '#f9fafb';
-}
-
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { padding: 20, paddingBottom: 36 },
+  content: { width: '100%', alignSelf: 'center', maxWidth: 760, paddingHorizontal: Layout.pageGutter, paddingTop: 20, paddingBottom: 36, gap: 8 },
+  webContent: { paddingTop: 36, paddingBottom: 52 },
   field: { marginBottom: 16, flex: 1 },
   label: { fontSize: 13, fontWeight: '600', marginBottom: 7 },
   inputContainer: { flexDirection: 'row', alignItems: 'center', gap: 9, borderWidth: 1, borderRadius: 10, height: 48, paddingHorizontal: 12 },

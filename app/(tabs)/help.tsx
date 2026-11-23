@@ -4,6 +4,7 @@ import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 import { SettingsButton } from '@/components/ui/SettingsButton';
 import { Colors } from '@/constants/Colors';
+import { Layout } from '@/constants/Layout';
 import { useColorScheme } from '@/hooks/useColorScheme';
 
 const FAQS = [
@@ -25,22 +26,21 @@ const FAQS = [
 
 export default function HelpScreen() {
   const colorScheme = useColorScheme() ?? 'light';
-  const isDark = colorScheme === 'dark';
   const theme = Colors[colorScheme];
   const palette = {
     screenBg: theme.background,
-    heroBg: isDark ? '#0f172a' : '#EEF2FF',
-    cardBg: isDark ? '#111827' : '#fff',
-    border: isDark ? '#1f2937' : '#E5E7EB',
-    textStrong: isDark ? '#f8fafc' : '#111827',
-    textMuted: isDark ? '#94a3b8' : '#4B5563',
-    textSubtle: isDark ? '#9ca3af' : '#475569',
+    heroBg: theme.surfaceMuted,
+    cardBg: theme.surface,
+    border: theme.border,
+    textStrong: theme.text,
+    textMuted: theme.icon,
+    textSubtle: theme.icon,
   };
 
   return (
     <View style={[styles.screen, { backgroundColor: palette.screenBg }]}>
-      <SettingsButton />
       <ScrollView contentContainerStyle={[styles.container, { backgroundColor: palette.screenBg }]}>
+      <SettingsButton style={styles.toolbar} />
       <ThemedView style={[styles.hero, { backgroundColor: palette.heroBg }]}>
         <ThemedText type="title">Help & Support</ThemedText>
         <ThemedText type="default" style={[styles.subtle, { color: palette.textMuted }]}>
@@ -83,13 +83,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   container: {
-    padding: 18,
-    paddingTop: 48,
-    gap: 14,
+    width: '100%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    paddingHorizontal: Layout.pageGutter,
+    paddingTop: 20,
+    paddingBottom: 44,
+    gap: 16,
   },
+  toolbar: { position: 'relative', top: 0, right: 0, alignSelf: 'flex-end', marginBottom: -8 },
   hero: {
-    padding: 18,
-    borderRadius: 18,
+    padding: 24,
+    borderRadius: Layout.radius.panel,
     backgroundColor: '#EEF2FF',
     gap: 6,
   },
@@ -97,8 +102,8 @@ const styles = StyleSheet.create({
     color: '#4B5563',
   },
   card: {
-    padding: 14,
-    borderRadius: 14,
+    padding: 20,
+    borderRadius: Layout.radius.card,
     backgroundColor: '#fff',
     borderWidth: 1,
     borderColor: '#E5E7EB',
